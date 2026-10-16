@@ -1,0 +1,7 @@
+# TEMPORARY local access only. Remove this override when setup is complete.
+# docker compose -f compose.yaml -f deploy/compose.setup.yaml up -d jellyfin
+services:
+  jellyfin:
+    ports: ["127.0.0.1:8096:8096"]
+  qbittorrent:
+    ports: ["127.0.0.1:8080:8080"]

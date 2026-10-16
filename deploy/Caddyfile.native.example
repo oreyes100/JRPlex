@@ -1,0 +1,14 @@
+{
+	admin off
+}
+
+# Replace with the selected hostname. Keep Jellyfin/qBittorrent bound to loopback.
+jrplex.example.org {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+	reverse_proxy 127.0.0.1:8787
+}

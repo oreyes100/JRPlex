@@ -1,0 +1,35 @@
+# A dedicated vhost for a host where nginx already owns 80/443.
+# Obtain TLS with the existing ACME client and configure its certificate paths.
+# Do not enable alongside the standalone Caddy profile.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name jrplexps.duckdns.org;
+    location /.well-known/acme-challenge/ { root /var/www/jrplex-acme; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name jrplexps.duckdns.org;
+    ssl_certificate /etc/letsencrypt/live/jrplexps.duckdns.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/jrplexps.duckdns.org/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 2m;
+    # No URLs/query strings/tokens in access logs for this private service.
+    access_log off;
+    error_log /var/log/nginx/jrplex-error.log warn;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_redirect off;
+    }
+}

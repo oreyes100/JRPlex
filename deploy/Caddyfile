@@ -1,0 +1,21 @@
+{
+	admin off
+	http_port 8080
+	https_port 8443
+	auto_https disable_redirects
+}
+
+http://{$CADDY_DOMAIN}:8080 {
+	redir https://{$CADDY_DOMAIN}{uri} permanent
+}
+
+https://{$CADDY_DOMAIN}:8443 {
+	# No access log: multimedia URLs can contain authentication material upstream.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+	reverse_proxy gateway:8787
+}

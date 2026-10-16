@@ -1,0 +1,19 @@
+[Unit]
+Description=JRPlex Docker media stack
+Requires=docker.service jrplex-google-drive.service
+After=docker.service jrplex-google-drive.service
+BindsTo=jrplex-google-drive.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=devops
+Group=devops
+WorkingDirectory=/home/devops/JRPlex
+ExecStartPre=/usr/bin/mountpoint -q /home/devops/JRPlex/runtime/media/cloud
+ExecStart=/usr/bin/docker compose -f compose.yaml -f deploy/compose.google-drive.yaml up -d
+ExecStop=/usr/bin/docker compose -f compose.yaml -f deploy/compose.google-drive.yaml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101418">
+  <meta name="description" content="Política de privacidad de JRPlex y uso de datos de Google Drive.">
+  <title>Política de privacidad · JRPlex</title>
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/info.css">
+</head>
+<body>
+  <header class="top"><a class="brand" href="/" aria-label="JRPlex inicio"><img src="/mark.svg" width="38" height="38" alt=""><span>JR<span class="light">Plex</span><span class="dot">.</span></span></a><a class="login" href="/app">Entrar a JRPlex <span aria-hidden="true">↗</span></a></header>
+  <main class="policy">
+    <p class="eyebrow">TRANSPARENCIA</p>
+    <h1>Política de privacidad</h1>
+    <p class="updated">Última actualización: 16 de octubre de 2026</p>
+    <p>Esta política describe cómo la instancia privada de JRPlex, operada por el administrador del servidor, trata la información de las personas que usan el servicio y los datos de Google Drive que el administrador autoriza. JRPlex es un servidor multimedia independiente; no es un producto de Google.</p>
+
+    <h2>Información que se procesa</h2>
+    <ul>
+      <li><strong>Cuenta de JRPlex:</strong> nombre de usuario, credenciales de acceso y permisos que el administrador configura. El servicio de biblioteca Jellyfin gestiona las credenciales de JRPlex; no son las credenciales de Google.</li>
+      <li><strong>Google Drive:</strong> cuando el administrador vincula una cuenta, JRPlex solicita el permiso OAuth de solo lectura <code>https://www.googleapis.com/auth/drive.readonly</code>. Ese permiso permite acceder a los archivos y carpetas que la cuenta vinculada puede ver. JRPlex procesa nombres, estructura de carpetas y metadatos para crear el catálogo, y lee los bytes de videos, música o fotografías que se solicitan para mostrarlos o reproducirlos.</li>
+      <li><strong>Autorización de Google:</strong> Google devuelve tokens de acceso y renovación a JRPlex. JRPlex no recibe ni almacena la contraseña de Google. No solicita permiso para modificar, subir o eliminar archivos de Drive.</li>
+      <li><strong>Uso del servicio:</strong> el servidor procesa solicitudes de inicio de sesión, permisos de biblioteca, búsquedas, reproducción y registros técnicos necesarios para operar y proteger la instancia.</li>
+    </ul>
+
+    <h2>Cómo se usa la información</h2>
+    <p>Los datos de Drive se usan únicamente para enumerar la biblioteca que administra el servidor, buscar medios y entregar al usuario autorizado el contenido que seleccionó. Los tokens se usan para renovar el acceso de solo lectura. JRPlex no usa los datos de Drive para publicidad, perfiles comerciales ni venta de información.</p>
+
+    <h2>Almacenamiento, seguridad y destinatarios</h2>
+    <p>La autorización y los datos de la biblioteca se procesan en el equipo o VPS donde está instalado JRPlex. Los tokens de Google se guardan cifrados con AES-256-GCM; la clave se conserva como archivo privado separado y los permisos de archivos se limitan a la cuenta del servicio. La comunicación pública con JRPlex usa HTTPS. El proveedor de alojamiento y los componentes que ejecutan la biblioteca multimedia pueden procesar datos técnicos para prestar el servicio.</p>
+    <p>Los nombres y archivos de una biblioteca se muestran únicamente a las cuentas de JRPlex a las que el administrador concedió acceso. El contenido de Drive se solicita a los servidores de Google cuando hace falta para explorar o reproducirlo y se transmite al usuario autorizado. El administrador del servidor puede tener acceso técnico a las bibliotecas y registros de la instancia.</p>
+
+    <h2>Conservación y eliminación</h2>
+    <p>El administrador conserva la autorización mientras Drive siga conectado. Puede desconectarla desde JRPlex; para impedir además futuras autorizaciones, el titular puede revocar el acceso de JRPlex desde su cuenta de Google. Desconectar JRPlex no elimina ni modifica los archivos originales de Drive. El catálogo, registros y cachés temporales del servidor siguen las tareas de limpieza y retención configuradas por el administrador. El administrador puede eliminar cuentas y bibliotecas de JRPlex.</p>
+
+    <h2>Elección y control</h2>
+    <p>Vincular Google Drive es una acción del administrador, no de los usuarios invitados. El administrador puede usar una cuenta dedicada y conceder a esa cuenta acceso únicamente a las carpetas multimedia necesarias. Los usuarios invitados deben pedir al administrador que revise, corrija o elimine su cuenta y los datos asociados.</p>
+
+    <h2>Contacto y cambios</h2>
+    <p>Para preguntas de privacidad, solicitudes relacionadas con una cuenta o notificaciones de seguridad, contacta al administrador que te invitó o que opera este servidor JRPlex. Esta política se actualizará si cambian las funciones o el tratamiento de datos; la fecha de actualización aparece al inicio.</p>
+    <p class="back"><a href="/">Volver a la información de JRPlex</a> · <a href="/app">Entrar a JRPlex</a></p>
+  </main>
+  <footer><span>JRPlex · Servidor multimedia privado</span><a href="/privacy">Política de privacidad</a></footer>
+</body>
+</html>

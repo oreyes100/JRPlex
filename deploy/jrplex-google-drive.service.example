@@ -1,0 +1,27 @@
+[Unit]
+Description=JRPlex Google Drive read-only mount
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=devops
+Group=devops
+WorkingDirectory=/home/devops/JRPlex
+UMask=0077
+ExecStart=/usr/bin/node /home/devops/JRPlex/scripts/google-drive-mount.mjs --rclone /home/devops/JRPlex/runtime/tools/rclone-v1.75.2-linux-amd64/rclone --mount /home/devops/JRPlex/runtime/media/cloud --cache /home/devops/.cache/jrplex/google-drive
+Restart=on-failure
+RestartSec=30
+# FUSE must propagate the host mount to Jellyfin's bind mount.
+# Filesystem namespace hardening makes this service's mount invisible to the host.
+PrivateMounts=no
+LockPersonality=true
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+ExecStartPre=/bin/rm -f /home/devops/.local/share/jrplex/google-drive-mount/mount-status
+ExecStartPost=/bin/sh -c 'for attempt in $(seq 1 60); do if /usr/bin/mountpoint -q /home/devops/JRPlex/runtime/media/cloud; then printf active > /home/devops/.local/share/jrplex/google-drive-mount/mount-status; chmod 644 /home/devops/.local/share/jrplex/google-drive-mount/mount-status; exit 0; fi; sleep 1; done; exit 1'
+ExecStopPost=/bin/rm -f /home/devops/.local/share/jrplex/google-drive-mount/mount-status
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,189 @@
+name: ${COMPOSE_PROJECT_NAME:-jrplex}
+
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  jellyfin:
+    image: ${JELLYFIN_IMAGE:-ghcr.io/jellyfin/jellyfin:12.2}
+    user: "${JRP_UID:-1000}:${JRP_GID:-1000}"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      JELLYFIN_PublishedServerUrl: ${PUBLIC_URL:-http://127.0.0.1:8787}
+    volumes:
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/jellyfin/config
+        target: /config
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/jellyfin/cache
+        target: /cache
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${LOCAL_MEDIA:-./runtime/media/local}
+        target: /media/local
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CLOUD_MEDIA:-./runtime/media/cloud}
+        target: /media/cloud
+        read_only: true
+        bind: {create_host_path: false, propagation: rslave}
+      - type: bind
+        source: ${DOWNLOADS_COMPLETE:-./runtime/downloads/complete}
+        target: /media/downloads
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
+    expose: ["8096"]
+    networks: [media]
+    pids_limit: 512
+    stop_grace_period: 90s
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent --max-time 8 http://127.0.0.1:8096/health >/dev/null"]
+      start_period: 180s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging: *bounded-logs
+
+  gateway:
+    build: .
+    init: true
+    user: "${JRP_UID:-1000}:${JRP_GID:-1000}"
+    read_only: true
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8787"
+      JELLYFIN_URL: http://jellyfin:8096
+      PUBLIC_URL: ${PUBLIC_URL:-http://127.0.0.1:8787}
+      SESSION_TTL: ${SESSION_TTL:-28800}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      QB_URL: ${QB_URL:-}
+      TORRENT_FILES_DIR: /downloads/incomplete
+      TORRENT_SAVE_PATH: /downloads/incomplete
+      QB_USERNAME_FILE: /run/secrets/qb-username
+      QB_PASSWORD_FILE: /run/secrets/qb-password
+    volumes:
+      # The installer creates empty placeholders. Torrent setup fills these only locally.
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/secrets/qb-username
+        target: /run/secrets/qb-username
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/secrets/qb-password
+        target: /run/secrets/qb-password
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DOWNLOADS_INCOMPLETE:-./runtime/downloads/incomplete}
+        target: /downloads/incomplete
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    ports: ["127.0.0.1:8787:8787"]
+    depends_on:
+      jellyfin: {condition: service_healthy}
+    networks: [media]
+    pids_limit: 128
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *bounded-logs
+
+  qbittorrent:
+    profiles: [torrents]
+    image: ${QB_IMAGE:-lscr.io/linuxserver/qbittorrent:5.2.4_v2.0.15-ls480}
+    user: "${JRP_UID:-1000}:${JRP_GID:-1000}"
+    # Run the existing binary directly: s6 initialization requires writes outside
+    # /config and is unnecessary for this single-process non-root service.
+    entrypoint: [/app/qbittorrent-nox]
+    command: [--confirm-legal-notice, --webui-port=8080, --torrenting-port=6881]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      TZ: UTC
+      HOME: /config
+      XDG_CONFIG_HOME: /config
+      XDG_DATA_HOME: /config/data
+      XDG_CACHE_HOME: /config/cache
+      XDG_RUNTIME_DIR: /run
+    volumes:
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/qbittorrent
+        target: /config
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DOWNLOADS_COMPLETE:-./runtime/downloads/complete}
+        target: /downloads/complete
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DOWNLOADS_INCOMPLETE:-./runtime/downloads/incomplete}
+        target: /downloads/incomplete
+        bind: {create_host_path: false}
+    # Qt runtime directory is private to the same unprivileged UID.
+    tmpfs:
+      - /run:rw,noexec,nosuid,uid=${JRP_UID:-1000},gid=${JRP_GID:-1000},mode=0700,size=32m
+      - /tmp:rw,noexec,nosuid,size=64m
+    expose: ["8080", "6881/tcp", "6881/udp"]
+    networks: [media]
+    pids_limit: 256
+    stop_grace_period: 60s
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent --output /dev/null --max-time 5 http://127.0.0.1:8080/ || exit 1"]
+      start_period: 60s
+      interval: 30s
+      timeout: 8s
+      retries: 4
+    logging: *bounded-logs
+
+  caddy:
+    profiles: [public]
+    image: ${CADDY_IMAGE:-caddy:2.11.7-alpine}
+    user: "${JRP_UID:-1000}:${JRP_GID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+    ports: ["80:8080", "443:8443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/caddy/data
+        target: /data
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${JRP_DATA_DIR:-./runtime}/caddy/config
+        target: /config
+        bind: {create_host_path: false}
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    networks: [media]
+    depends_on:
+      gateway: {condition: service_healthy}
+    pids_limit: 128
+    logging: *bounded-logs
+
+networks:
+  media:
+    driver: bridge

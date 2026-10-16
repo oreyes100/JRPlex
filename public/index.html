@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101418">
+  <title>JRPlex · Tu biblioteca, donde estés</title>
+  <meta name="description" content="Tu servidor multimedia privado. Películas, series y música en un solo lugar.">
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/hls.min.js" defer></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#content">Ir al contenido</a>
+  <section id="login-screen" class="login-screen" hidden>
+    <div class="login-art" aria-hidden="true"><div class="orbit one"></div><div class="orbit two"></div><div class="play-emblem">▷</div><div class="art-caption">UNA BIBLIOTECA.<br>INFINITAS NOCHES.</div><div class="art-foot">JRPlex / PRIVATE MEDIA SERVER</div></div>
+    <div class="login-panel">
+      <a class="brand" href="/"><img src="/mark.svg" width="34" height="34" alt=""><span>JR<span class="brand-light">Plex</span><span class="brand-dot">.</span></span></a>
+      <div class="login-copy"><span class="eyebrow">TU ESPACIO PRIVADO</span><h1>La próxima historia<br>empieza aquí.</h1><p>Entra a tu biblioteca de películas, series y música.</p></div>
+      <form id="login-form" class="stack">
+        <label for="username">Usuario</label><input id="username" name="username" autocomplete="username" maxlength="100" required placeholder="Tu nombre de usuario">
+        <label for="password">Contraseña</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required placeholder="Tu contraseña">
+        <p id="login-error" role="alert" class="form-error"></p>
+        <button class="primary full" type="submit">Entrar a JRPlex <span aria-hidden="true">↗</span></button>
+      </form>
+      <p class="login-note"><span aria-hidden="true">◈</span> Solo para usuarios autorizados por tu administrador.</p>
+      <footer>Tu contenido. Tu servidor. Tu control.<br><span>JRPlex 0.1 · Funciona con Jellyfin · <a href="/privacy">Privacidad</a></span></footer>
+    </div>
+  </section>
+  <div id="app-screen" class="app-shell" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="/"><img src="/mark.svg" width="32" height="32" alt=""><span>JR<span class="brand-light">Plex</span><span class="brand-dot">.</span></span></a>
+      <p class="nav-caption">EXPLORAR</p>
+      <nav aria-label="Biblioteca" id="main-nav">
+        <button data-view="home" class="nav-item active"><span aria-hidden="true">⌂</span> Inicio</button>
+        <button data-view="movies" class="nav-item"><span aria-hidden="true">▤</span> Películas</button>
+        <button data-view="series" class="nav-item"><span aria-hidden="true">▣</span> Series</button>
+        <button data-view="music" class="nav-item"><span aria-hidden="true">♫</span> Música</button>
+        <button data-view="folders" class="nav-item"><span aria-hidden="true">▱</span> Carpetas</button>
+        <button data-view="favorites" class="nav-item"><span aria-hidden="true">♡</span> Favoritos</button>
+        <button data-view="photos" class="nav-item"><span aria-hidden="true">▧</span> Fotografías</button>
+      </nav>
+      <div class="sidebar-bottom"><button id="admin-nav" data-view="admin" class="nav-item" hidden><span aria-hidden="true">⚙</span> Administración</button><div class="server-tag"><span class="status-dot"></span> Biblioteca privada<small>Funciona con Jellyfin</small></div></div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar"><span class="top-label">TU BIBLIOTECA, DONDE ESTÉS</span><form id="search-form" class="search"><label class="sr-only" for="search-input">Buscar en tu biblioteca</label><span aria-hidden="true">⌕</span><input id="search-input" type="search" maxlength="150" placeholder="Películas, series, música…"><button type="submit" class="sr-only">Buscar</button></form><div class="account"><span id="user-initial" class="avatar"></span><span id="user-name"></span><button id="change-password" class="icon-button" title="Cambiar contraseña" aria-label="Cambiar contraseña">⚿</button><button id="logout" class="icon-button" title="Cerrar sesión" aria-label="Cerrar sesión">↪</button></div></header>
+      <main id="content" tabindex="-1"><div class="loading">Conectando con tu biblioteca…</div></main>
+      <footer class="app-footer"><span>JRPlex <span class="muted">/ Tu servidor multimedia</span></span><span><a href="/privacy">Privacidad y datos de Google Drive</a> <span class="accent">◈</span></span></footer>
+    </div>
+  </div>
+  <dialog id="detail-dialog" class="detail-dialog"><button class="close-dialog icon-button" aria-label="Cerrar detalle">×</button><div id="detail-content"></div></dialog>
+  <dialog id="photos-dialog" class="photos-dialog" aria-labelledby="photo-slide-title"><header><div><span class="eyebrow">PRESENTACIÓN</span><h2 id="photo-slide-title">Fotografía</h2></div><button id="close-photos" class="icon-button" aria-label="Cerrar presentación">×</button></header><div class="photo-viewer"><img id="photo-slide-image" alt="" decoding="async"></div><footer><button id="photo-slide-prev" class="secondary" type="button">← Anterior</button><span id="photo-slide-count" role="status"></span><button id="photo-slide-toggle" class="primary" type="button">Iniciar secuencia</button><button id="photo-slide-next" class="secondary" type="button">Siguiente →</button></footer></dialog>
+  <dialog id="password-dialog" class="detail-dialog"><button class="close-password icon-button" aria-label="Cerrar cambio de contraseña">×</button><h2>Cambiar contraseña</h2><p class="muted">Usa una contraseña única de al menos 16 caracteres. Se cerrarán tus sesiones actuales.</p><form id="password-form" class="stack"><label for="current-password">Contraseña actual</label><input id="current-password" type="password" autocomplete="current-password" required maxlength="256"><label for="new-password">Nueva contraseña</label><input id="new-password" type="password" autocomplete="new-password" minlength="16" maxlength="256" required><label for="confirm-password">Repite la nueva contraseña</label><input id="confirm-password" type="password" autocomplete="new-password" minlength="16" maxlength="256" required><p id="password-error" role="alert" class="form-error"></p><button class="primary" type="submit">Guardar y cerrar sesiones</button></form></dialog>
+  <dialog id="player-dialog" class="player-dialog"><header><div><span class="eyebrow">REPRODUCIENDO</span><h2 id="player-title"></h2></div><button id="close-player" class="icon-button" aria-label="Cerrar reproductor">×</button></header><video id="video" controls playsinline preload="metadata"></video><div class="player-bottom"><p id="player-state" role="status">Preparando reproducción…</p><label>Calidad <select id="quality"><option value="auto">Automática · hasta 12 Mbps</option><option value="4000000">Ahorro · 4 Mbps</option><option value="direct">Archivo original compatible</option></select></label></div><p id="player-error" class="form-error" role="alert"></p><p id="player-source-info" class="source-info" hidden></p></dialog>
+  <div id="toast" role="status" class="toast" hidden></div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Optional overlay: mounts OAuth secrets read-only, keeps encrypted tokens in a
+# private volume, and exposes only a host-written cloud-mount status marker.
+services:
+  gateway:
+    environment:
+      GOOGLE_OAUTH_CLIENT_FILE: /run/secrets/google-web-client.json
+      GOOGLE_OAUTH_KEY_FILE: /run/secrets/google-drive-key
+      GOOGLE_OAUTH_TOKEN_FILE: /var/lib/jrplex/google-drive/token.enc
+    volumes:
+      - type: bind
+        source: ${GOOGLE_OAUTH_CLIENT_HOST_FILE:-/home/devops/.config/jrplex/google-web.json}
+        target: /run/secrets/google-web-client.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GOOGLE_OAUTH_KEY_HOST_FILE:-/home/devops/.local/share/jrplex/secrets/google-drive.key}
+        target: /run/secrets/google-drive-key
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GOOGLE_OAUTH_STATE_DIR:-/home/devops/.local/share/jrplex/google-drive}
+        target: /var/lib/jrplex/google-drive
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GOOGLE_DRIVE_MOUNT_STATUS_DIR:-/home/devops/.local/share/jrplex/google-drive-mount}
+        target: /var/lib/jrplex/google-drive-mount
+        read_only: true
+        bind: {create_host_path: false}

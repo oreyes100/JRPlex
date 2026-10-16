@@ -1,0 +1,321 @@
+{
+  "timestamp": "2026-10-15T17:32:00.594Z",
+  "engineVersion": "12.2.0",
+  "source": {
+    "server.mjs": "f60fbb1ca7fdcf2e0eb01e1d08ff05e90590bf4bd29f93d28d5c804b8756bab2",
+    "public/app.js": "c96706a3c634faa301ce4b52d63b1d5b0b16e5f92aa82d2ff63a767dfb38c371",
+    "lib/security.mjs": "ab6cee74334a7051ade32441da6bbc426e4cd0e13812cf392730fbb929d2906a",
+    "lib/torrents.mjs": "881be58ee1dce4a51a8961cc7a36918aeb089de63e5d91e70d0774c3efdf1b2f",
+    "compose.yaml": "61716725130e34a269a8374001c0b06ee65f44797449b6263b1d91f9281ebbf0",
+    "scripts/acceptance-real.mjs": "3bf1d645bf5b270006f3cc18e8e3a04fb87bc45d140d60ceeb0535aa130a104f"
+  },
+  "items": {
+    "local": "2c6ed6cae7ea6747e3dcff0043741dc8",
+    "restricted": "073c5e17cced18b9efa45bfdc67d3f18",
+    "localLibrary": "853c1e2677ce1fe6540b93389d380a82",
+    "downloadsLibrary": "0ca056497a9c0b5f7f676a9a95c7d27d"
+  },
+  "checks": [
+    {
+      "id": "R00",
+      "name": "Real media engine initialized before publication",
+      "status": "APROBADA",
+      "details": {
+        "engineVersion": "12.2.0"
+      }
+    },
+    {
+      "id": "R01",
+      "name": "Gateway health",
+      "status": "APROBADA",
+      "details": {
+        "http": 200
+      }
+    },
+    {
+      "id": "R02",
+      "name": "Anonymous catalogue denied",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R03",
+      "name": "Anonymous media stream denied",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R04",
+      "name": "Invalid credentials denied",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R05",
+      "name": "Real administrator login returns opaque session",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R06",
+      "name": "Cookie is HttpOnly, SameSite Strict and Secure",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R07",
+      "name": "Mutation without CSRF rejected",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R08",
+      "name": "Mutation from foreign origin rejected",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R09",
+      "name": "Real admin users and library APIs work without private fields",
+      "status": "APROBADA",
+      "details": {
+        "users": 2,
+        "libraries": 2
+      }
+    },
+    {
+      "id": "R10",
+      "name": "Both real libraries contain media after refresh",
+      "status": "APROBADA",
+      "details": {
+        "local": 1,
+        "downloads": 1
+      }
+    },
+    {
+      "id": "R11",
+      "name": "Administrator catalogue contains no backend tokens or paths",
+      "status": "APROBADA",
+      "details": {
+        "count": 4
+      }
+    },
+    {
+      "id": "R12",
+      "name": "Owned test viewer created/reused and restricted to Local",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R13",
+      "name": "Viewer cannot administer users",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R14",
+      "name": "Viewer cannot administer libraries",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R15",
+      "name": "Viewer sees Local and no Descargas catalogue entries",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R16",
+      "name": "Denied item inaccessible by direct item ID",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R17",
+      "name": "Denied item stream inaccessible by direct ID",
+      "status": "APROBADA",
+      "details": {
+        "http": 403
+      }
+    },
+    {
+      "id": "R18",
+      "name": "Real video range is exactly 1024 bytes with Content-Range",
+      "status": "APROBADA",
+      "details": {
+        "http": 206,
+        "bytes": 1024
+      }
+    },
+    {
+      "id": "R19",
+      "name": "HEAD preserves media range headers without a body",
+      "status": "APROBADA",
+      "details": {
+        "http": 206
+      }
+    },
+    {
+      "id": "R20",
+      "name": "Real PlaybackInfo produces sanitized H264/AAC fMP4 HLS",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R21",
+      "name": "Master/media HLS playlists retrieved without tokens",
+      "status": "APROBADA",
+      "details": {
+        "playlists": 2
+      }
+    },
+    {
+      "id": "R22",
+      "name": "Real ffmpeg HLS initialization bytes",
+      "status": "APROBADA",
+      "details": {
+        "bytes": 1365,
+        "http": 200
+      }
+    },
+    {
+      "id": "R23",
+      "name": "Real ffmpeg HLS media segment bytes",
+      "status": "APROBADA",
+      "details": {
+        "bytes": 240813,
+        "http": 200
+      }
+    },
+    {
+      "id": "R24",
+      "name": "Playing and progress events accepted by real engine",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R25",
+      "name": "Stopped playback event accepted",
+      "status": "APROBADA",
+      "details": {
+        "http": 204
+      }
+    },
+    {
+      "id": "R26",
+      "name": "Disabled viewer session immediately rejected",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R27",
+      "name": "Owned test viewer re-enabled after revocation test",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R28-1",
+      "name": "Password change revokes previous gateway session",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R28-2",
+      "name": "Password change revokes previous gateway session",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "R29",
+      "name": "Password changed and new password authenticates owned test account",
+      "status": "APROBADA",
+      "details": {}
+    },
+    {
+      "id": "R30",
+      "name": "Real logout accepted",
+      "status": "APROBADA",
+      "details": {
+        "http": 200
+      }
+    },
+    {
+      "id": "R31",
+      "name": "Logout invalidates previous cookie",
+      "status": "APROBADA",
+      "details": {
+        "http": 401
+      }
+    },
+    {
+      "id": "P-CLOUD",
+      "name": "Real encrypted cloud mount and cloud playback",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-TORRENT",
+      "name": "Real completed torrent and downloaded-media playback",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-MAC",
+      "name": "macOS native deployment and browser playback",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-WINDOWS",
+      "name": "Windows native deployment and browser playback",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-RESTORE",
+      "name": "Independent backup restoration",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-PUBLIC",
+      "name": "External public DNS and trusted TLS reachability",
+      "status": "PENDIENTE",
+      "details": {}
+    },
+    {
+      "id": "P-BROWSER",
+      "name": "Visual browser playback, seek, subtitles and quality selection",
+      "status": "PENDIENTE",
+      "details": {}
+    }
+  ],
+  "finishedAt": "2026-10-15T17:32:06.410Z",
+  "summary": {
+    "passed": 33,
+    "failed": 0,
+    "pending": 7
+  }
+}

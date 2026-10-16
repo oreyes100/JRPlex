@@ -1,0 +1,24 @@
+[Unit]
+Description=JRPlex native gateway
+After=network-online.target jellyfin.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adapt these paths and the service account; do not run the gateway as root.
+User=jrplex
+Group=jrplex
+WorkingDirectory=/opt/JRPlex
+EnvironmentFile=/opt/JRPlex/.env
+ExecStart=/usr/bin/node /opt/JRPlex/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
