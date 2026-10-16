@@ -1,0 +1,5 @@
+PASS Drive: movies/photos/music each save their explicitly selected nested folder
+PASS magnet: actual Chrome video playback advances after deferred file creation; peers are simulated
+PASS torrent errors: persistent server disk error is visible in the player
+PASS retry: existing torrent session is reused without deletion
+PASS cleanup and browser JavaScript: no page errors

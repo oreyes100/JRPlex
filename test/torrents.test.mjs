@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createTorrentClient, parseTorrentRange, torrentInput } from '../lib/torrents.mjs';
@@ -68,7 +69,7 @@ test('torrent video is served only after its selected pieces verify and deleted 
   assert.equal(addFields.get('paused'), 'false', 'metadata discovery can run');
   assert.equal(addFields.get('dlLimit'), '1', 'metadata discovery has a one-byte-per-second payload cap');
   assert.equal(addFields.get('sequentialDownload'), 'true');
-  assert.equal(addFields.get('firstLastPiecePrio'), 'false');
+  assert.equal(addFields.get('firstLastPiecePrio'), 'true');
   assert.ok(filePolls >= 2, 'the qBittorrent 404 while metadata is pending is retried');
   const playback = await client.play(session.id, 0);
   assert.equal(playback.size, 16);
@@ -160,4 +161,148 @@ test('Matroska torrent streams are converted to fragmented MP4 after their first
   assert.match(Buffer.concat(response.output).toString(), /ftyp-isom.*moof/);
   assert.ok(pieceCalls >= 2, 'the first response waits until the opening torrent piece is verified');
   await client.close();
+});
+
+async function pendingFixture(t, { files, contentPath, ready, state = 'downloading', pieceWaitLimit = 3000 } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jrplex-pending-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const hash = '1234567890123456789012345678901234567890';
+  files ||= [{ index: 0, name: 'movie.mp4', size: 8 }];
+  let added = false; let pieceCalls = 0;
+  const fetch = async (url) => {
+    const parsed = new URL(url); const route = parsed.pathname.replace('/api/v2/', '');
+    if (route === 'auth/login') return new Response('Ok.', { headers: { 'set-cookie': 'SID=test' } });
+    if (route === 'torrents/info') return Response.json(parsed.searchParams.has('tag') || !added ? [] : [{ hash, tags: 'jrplex-stream', save_path: root, content_path: contentPath ? path.join(root, contentPath) : root, state, num_seeds: 2, num_leechs: 3, dlspeed: 4096, progress: 0.25 }]);
+    if (route === 'torrents/add') { added = true; return new Response('Ok.'); }
+    if (route === 'torrents/files') return Response.json(files);
+    if (route === 'torrents/properties') return Response.json({ piece_size: 4 });
+    if (route === 'torrents/pieceStates') {
+      pieceCalls++;
+      const verified = ready ? await ready(root, pieceCalls) : true;
+      return Response.json(Array(16).fill(verified ? 2 : 0));
+    }
+    if (route === 'torrents/delete') { added = false; return new Response(''); }
+    if (route.startsWith('torrents/')) return new Response('');
+    throw new Error(route);
+  };
+  const client = createTorrentClient({ qbUrl: 'http://127.0.0.1:8080', qbUsername: 'test', qbPassword: 'test', torrentFilesDir: root, torrentSavePath: root, upstreamTimeout: 1000, maxJson: 8192 }, { fetch, pieceWaitLimit });
+  t.after(() => client.close());
+  const session = await client.add({ url: `magnet:?xt=urn:btih:${hash}` });
+  const response = new class extends EventEmitter {
+    chunks = []; writableEnded = false; destroyed = false;
+    writeHead(status, headers) { this.statusCode = status; this.headers = headers; }
+    write(chunk) { this.chunks.push(Buffer.from(chunk)); return true; }
+    end() { this.writableEnded = true; }
+  }();
+  const stream = (index = 0, range) => client.stream({ method: 'GET', headers: range ? { range } : {} }, response, session.id, index);
+  return { root, client, session, response, stream };
+}
+
+test('new magnets wait for verified pieces before opening a file created later by qBittorrent', async (t) => {
+  const f = await pendingFixture(t, { contentPath: 'movie.mp4', ready: async (root, calls) => {
+    if (calls === 1) return false;
+    await writeFile(path.join(root, 'movie.mp4'), '12345678'); return true;
+  } });
+  await f.client.play(f.session.id, 0);
+  await f.stream();
+  assert.equal(f.response.statusCode, 200);
+  assert.equal(f.response.headers['Content-Length'], '8');
+  assert.equal(Buffer.concat(f.response.chunks).toString(), '12345678');
+});
+
+test('flat multifile torrents serve the chosen file instead of attempting to open their root directory', async (t) => {
+  const f = await pendingFixture(t, { files: [{ index: 0, name: 'readme.txt', size: 3 }, { index: 1, name: 'movie.mp4', size: 8 }] });
+  await writeFile(path.join(f.root, 'movie.mp4'), 'abcdefgh');
+  await f.client.play(f.session.id, 1);
+  await f.stream(1, 'bytes=1-6');
+  assert.equal(Buffer.concat(f.response.chunks).toString(), 'bcdefg');
+  assert.equal(f.response.headers['Content-Range'], 'bytes 1-6/8');
+});
+
+test('incomplete .!qB files and partially allocated videos support verified ranges without a full download', async (t) => {
+  const f = await pendingFixture(t, { contentPath: 'Collection', files: [{ index: 0, name: 'Collection/movie.mp4', size: 1024 }] });
+  await mkdir(path.join(f.root, 'Collection'));
+  await writeFile(path.join(f.root, 'Collection/movie.mp4.!qB'), 'abcdefgh');
+  await f.client.play(f.session.id, 0);
+  await f.stream(0, 'bytes=0-3');
+  assert.equal(Buffer.concat(f.response.chunks).toString(), 'abcd');
+});
+
+test('a swarm without pieces returns a bounded actionable error and exposes it in playback status', async (t) => {
+  const f = await pendingFixture(t, { ready: async () => false, pieceWaitLimit: 20 });
+  await f.client.play(f.session.id, 0);
+  await assert.rejects(f.stream(), error => error.status === 504 && /pares activos/.test(error.message));
+  assert.equal(f.response.statusCode, undefined, 'no successful media headers precede failure');
+  const status = await f.client.status(f.session.id);
+  assert.equal(status.peers, 5); assert.equal(status.downloadSpeed, 4096);
+  assert.match(status.error, /pares activos/);
+  await f.client.play(f.session.id, 0);
+  assert.equal((await f.client.status(f.session.id)).error, null, 'retry clears the prior failure');
+});
+
+test('disk failures are reported without waiting for the piece timeout', async (t) => {
+  const f = await pendingFixture(t, { ready: async () => false, state: 'error' });
+  await f.client.play(f.session.id, 0);
+  await assert.rejects(f.stream(), error => error.status === 503 && /espacio/.test(error.message));
+  assert.match((await f.client.status(f.session.id)).error, /espacio/);
+});
+
+test('closing a stream while waiting for pieces cancels promptly', async (t) => {
+  const f = await pendingFixture(t, { ready: async () => false });
+  await f.client.play(f.session.id, 0);
+  const pending = f.stream();
+  setTimeout(() => f.response.emit('close'), 10);
+  await assert.rejects(pending, error => error.status === 499);
+  assert.equal((await f.client.status(f.session.id)).error, null);
+});
+
+test('torrent symlinks cannot expose a file outside the configured cache', async (t) => {
+  const f = await pendingFixture(t);
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'jrplex-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(path.join(outside, 'private.mp4'), 'private!');
+  await symlink(path.join(outside, 'private.mp4'), path.join(f.root, 'movie.mp4'));
+  await f.client.play(f.session.id, 0);
+  await assert.rejects(f.stream(), error => error.status === 403);
+  assert.equal(f.response.chunks.length, 0);
+});
+
+
+test('real FFmpeg converts a generated MKV torrent into a complete decodable MP4', { skip: spawnSync('ffmpeg', ['-version']).status !== 0 }, async (t) => {
+  const f = await pendingFixture(t, { files: [{ index: 0, name: 'movie.mkv', size: 1 }] });
+  const input = path.join(f.root, 'movie.mkv');
+  const generated = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '3', '-c:v', 'libx264', '-c:a', 'aac', '-y', input]);
+  assert.equal(generated.status, 0, generated.stderr?.toString());
+  // Use a dedicated client with the real file length and pieces already verified.
+  const { size } = await import('node:fs/promises').then(fs => fs.stat(input));
+  const hash = 'f'.repeat(40); let added = false;
+  const fetch = async (url) => {
+    const u = new URL(url); const route = u.pathname.replace('/api/v2/', '');
+    if (route === 'auth/login') return new Response('Ok.', { headers: { 'set-cookie': 'SID=ffmpeg' } });
+    if (route === 'torrents/info') return Response.json(u.searchParams.has('tag') || !added ? [] : [{ hash, tags: 'jrplex-stream', content_path: input, save_path: f.root }]);
+    if (route === 'torrents/add') { added = true; return new Response('Ok.'); }
+    if (route === 'torrents/files') return Response.json([{ index: 0, name: 'movie.mkv', size }]);
+    if (route === 'torrents/properties') return Response.json({ piece_size: 16384 });
+    if (route === 'torrents/pieceStates') return Response.json(Array(Math.ceil(size / 16384)).fill(2));
+    return new Response('');
+  };
+  const client = createTorrentClient({ qbUrl: 'http://127.0.0.1:8080', qbUsername: 'test', qbPassword: 'test', torrentFilesDir: f.root, upstreamTimeout: 1000, maxJson: 8192 }, { fetch });
+  t.after(() => client.close());
+  const session = await client.add({ url: `magnet:?xt=urn:btih:${hash}` });
+  await client.play(session.id, 0);
+  const response = new class extends Writable {
+    chunks = [];
+    writeHead(status, headers) { this.statusCode = status; this.headers = headers; }
+    _write(chunk, _encoding, done) { this.chunks.push(Buffer.from(chunk)); done(); }
+  }();
+  await client.stream({ method: 'GET', headers: {} }, response, session.id, 0);
+  assert.equal(response.statusCode, 200);
+  const output = path.join(f.root, 'converted.mp4');
+  await writeFile(output, Buffer.concat(response.chunks));
+  const decoded = spawnSync('ffmpeg', ['-v', 'error', '-i', output, '-f', 'null', '-']);
+  assert.equal(decoded.status, 0, decoded.stderr?.toString());
+  const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name,nb_read_frames', '-count_frames', '-of', 'json', output]);
+  const streams = JSON.parse(probe.stdout).streams;
+  assert.deepEqual(streams.map(stream => stream.codec_name), ['h264', 'aac']);
+  assert.equal(Number(streams[0].nb_read_frames), 72, 'every generated video frame survives the streaming pipeline');
 });

@@ -1,0 +1,4 @@
+Decisión: APROBADO · versión "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9"
+Defectos graves/incumplimientos/bloqueos: []
+Verificaciones declaradas: {"blocked":0,"failed":0,"not_applicable":0,"passed":3,"pending":1}; evidencias con hash vigente: 4.
+Limitaciones: ["No se comprobó un swarm real ni el magnet del usuario.","No se desplegó esta revisión ni se modificaron rutas reales de Drive.","Una prueba rclone opcional omitida; no afecta el código modificado.","Autorrevisión; sin revisión independiente, no requerida por riesgo local moderado."]; contenido y ejecución requieren revisión del agente.

@@ -1,0 +1,11 @@
+2026-10-16 America/Mexico_City — Autorrevisión local
+Node v24.19.0; FFmpeg y ffprobe del host.
+Sintaxis de public/app.js, lib/torrents.mjs y server.mjs: aprobada.
+Diff --check de los archivos de esta corrección: aprobado.
+styles.css tiene cambios preexistentes con CRLF; preservados y excluidos de este entregable.
+Revisión: piezas verificadas antes de abrir/leer; rutas reales confinadas a caché; prueba de symlink denegada; API de estado restringida a administrador; CSRF existente conservado.
+Revisión: cancelación durante espera; no se elimina sesión al reintentar; errores persistentes no se sobreescriben con rechazo de play(); falla de limpieza no se anuncia como éxito.
+Drive: selector invalida respuestas antiguas y desactiva usar carpeta mientras carga; fotos activa EnablePhotos; tres bibliotecas guardan subrutas explícitas.
+Inspección visual de drive.png: formulario, selector y tres carpetas legibles, botones visibles; Chrome automatizado sin errores JavaScript.
+No hay hallazgos críticos/mayores pendientes en el alcance local probado. No hubo revisión independiente: riesgo moderado, cambios reversibles, autorrevisión suficiente.
+No se ejecutó swarm externo, acceso a Drive real, despliegue, ni pruebas de Safari/TV.

@@ -28,14 +28,15 @@ En Windows o macOS, configura la WebUI de qBittorrent solo en loopback, autentic
 ## Flujo de reproducción
 
 1. El administrador pega el magnet o sube un archivo `.torrent` (máximo 1 MiB).
-2. qBittorrent obtiene metadatos en pausa. JRPlex desactiva todos los archivos y muestra solo los vídeos compatibles.
-3. Al elegir un vídeo, el gateway habilita ese archivo, activa prioridad secuencial y entrega rangos verificados conforme llegan sus piezas.
-4. El botón **Detener y borrar búfer**, el fin del vídeo o dos minutos sin peticiones quitan el torrent y eliminan sus archivos temporales.
+2. qBittorrent obtiene metadatos con la transferencia limitada; después JRPlex lo detiene. JRPlex desactiva todos los archivos y muestra solo los vídeos compatibles.
+3. Al elegir un vídeo, el gateway habilita ese archivo, activa prioridad secuencial y de las primeras/últimas piezas, y entrega rangos verificados conforme llegan sus piezas. Espera la primera pieza antes de abrir el archivo; admite carpetas multifichero y nombres temporales `.!qB`. MKV y otros contenedores se convierten a MP4 fragmentado con FFmpeg.
+4. El reproductor muestra pares y velocidad mientras espera. Si no llegan piezas en 60 segundos o qBittorrent informa un error de almacenamiento, muestra el motivo de forma persistente y permite reintentar.
+5. El botón **Detener y borrar búfer**, el fin del vídeo o dos minutos sin peticiones quitan el torrent y eliminan sus archivos temporales.
 
 La ruta de streaming requiere sesión JRPlex y permiso de administrador; la URL usa un identificador aleatorio y no revela el hash del torrent. Los endpoints administrativos conservan CSRF y comprobación de origen.
 
 ## Verificación necesaria
 
-Las pruebas automáticas usan un cliente API simulado y medios locales sintéticos para comprobar que solo se sirve una pieza verificada, que los rangos HTTP son correctos y que al detener se solicita `deleteFiles=true`. Para declarar la función operativa en un VPS, añade un torrent pequeño y autorizado en una prueba controlada, reproduce desde el principio y busca hacia adelante, detén la reproducción y confirma que el torrent desapareció y que sus archivos temporales se borraron. Esa prueba real aún está pendiente.
+Las pruebas automáticas usan un cliente API simulado y medios locales sintéticos para comprobar que solo se sirve una pieza verificada, que los rangos HTTP son correctos y que al detener se solicita `deleteFiles=true`. Para declarar la función operativa en un VPS, añade un torrent pequeño y autorizado en una prueba controlada, reproduce desde el principio y busca hacia adelante, detén la reproducción y confirma que el torrent desapareció y que sus archivos temporales se borraron. La prueba con un swarm real sigue pendiente. La regresión incluye un vídeo sintético que se reproduce en Chrome con qBittorrent simulado y una conversión MKV mediante FFmpeg real.
 
 Referencia de la API usada: [qBittorrent WebUI API 5.0](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29).

@@ -1,0 +1,255 @@
+{
+  "protocol_version": "3.0",
+  "schema_version": 1,
+  "task": "JRPlex: corrección local de magnets y selección de carpetas Drive",
+  "artifact": {
+    "files": [
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/lib/torrents.mjs",
+        "sha256": "fc4bf4c564cb56cbbf8a8b52dc57b71e54154832b88af169a3cff9c9e790f748"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/public/app.js",
+        "sha256": "6607515c7ac076259b780b506c7ccc53d024e5dbf124224970dccc904443460d"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/server.mjs",
+        "sha256": "fc319cd3213d801a225b353f5fbcb0168f5be6b091a8154cea5e5636cfdd01a9"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/test/torrents.test.mjs",
+        "sha256": "839bbd78b53ab35d8b0f9e6d0df0808c2318b5e32d94be25feca8cfe3fae0e2a"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/test/gateway.test.mjs",
+        "sha256": "8dc091ed563cbc07b3fdc2b730beb65e13c926bd723203177f0fe16743eca75e"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/README.md",
+        "sha256": "9c5682c4c9b7894a37856bec18696b18da1bf5c753b74857308a04e1c650fb73"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/deploy/TORRENTS.md",
+        "sha256": "6492a914e6b441f4f1cb883ab8de2134372efeb4dba402c266f5b85357911a35"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/docs/evidence/magnet-drive-fix-2026-10-16.md",
+        "sha256": "3ed831afd1396ab847132d4345aa70fe99a4e3fd8719acb9b166b2d64e0817df"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/browser-check.mjs",
+        "sha256": "40f9b9cb26679561c829f44b59f6ffb2008793211d9e018a1720d0bba4017b59"
+      },
+      {
+        "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/plan.md",
+        "sha256": "432bcc7cf756f2b553673138742a927fa4ee345f7743cec8cc12c7005399c688"
+      }
+    ],
+    "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9"
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "description": "Streaming progresivo de magnets",
+      "acceptance": "Archivo diferido/multifichero/.!qB, rangos verificados, cancelación, FFmpeg decodificable y reproducción en Chrome",
+      "expected_evidence": "Pruebas funcionales controladas, navegador y autorrevisión de código",
+      "mandatory": true,
+      "status": "passed",
+      "evidence": [
+        "E-tests",
+        "E-browser"
+      ],
+      "checks": [
+        "C-tests",
+        "C-browser"
+      ],
+      "defects": [
+        "D1"
+      ]
+    },
+    {
+      "id": "R2",
+      "description": "Errores y estado visibles",
+      "acceptance": "Estado con pares/velocidad y error persistente; falta de piezas acotada; reintento y limpieza",
+      "expected_evidence": "Pruebas funcionales controladas, navegador y autorrevisión de código",
+      "mandatory": true,
+      "status": "passed",
+      "evidence": [
+        "E-tests",
+        "E-browser",
+        "E-review"
+      ],
+      "checks": [
+        "C-tests",
+        "C-browser",
+        "C-review"
+      ],
+      "defects": [
+        "D2"
+      ]
+    },
+    {
+      "id": "R3",
+      "description": "Carpetas explícitas de Drive por contenido",
+      "acceptance": "Películas/fotos/música guardan carpeta anidada elegida y no crean bibliotecas en la raíz automáticamente",
+      "expected_evidence": "Pruebas funcionales controladas, navegador y autorrevisión de código",
+      "mandatory": true,
+      "status": "passed",
+      "evidence": [
+        "E-browser",
+        "E-visual",
+        "E-review"
+      ],
+      "checks": [
+        "C-browser",
+        "C-review"
+      ],
+      "defects": [
+        "D3"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "C-tests",
+      "required": true,
+      "executed": true,
+      "status": "passed",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Node 24.19.0; suite y FFmpeg real",
+      "evidence": [
+        "E-tests"
+      ]
+    },
+    {
+      "id": "C-browser",
+      "required": true,
+      "executed": true,
+      "status": "passed",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Chrome/Playwright; rutas Drive y reproducción/reintento/limpieza",
+      "evidence": [
+        "E-browser",
+        "E-visual"
+      ]
+    },
+    {
+      "id": "C-review",
+      "required": true,
+      "executed": true,
+      "status": "passed",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Autorrevisión funcional y seguridad; sintaxis; diff",
+      "evidence": [
+        "E-review"
+      ]
+    },
+    {
+      "id": "C-live",
+      "required": false,
+      "executed": false,
+      "status": "pending",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Prueba del magnet y bibliotecas reales en entorno publicado",
+      "evidence": [],
+      "reason": "Fuera de la aceptación local; no hay magnet del usuario ni despliegue autorizado en esta solicitud. No se declara aprobado el entorno real."
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-tests",
+      "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/tests.txt",
+      "sha256": "8ff045f583df1f09b65df1be92899c34bdb4aba8a9d670d85253a650cd1c069a",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Node v24.19.0 --test test/*.test.mjs; 64 tests, 63 passed, 1 optional skipped"
+    },
+    {
+      "id": "E-browser",
+      "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/browser.txt",
+      "sha256": "7cc417d18cb2db329d767ca42d5d864a3287ecce0db0a1e2216cd9c3433c67d8",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Playwright with installed Chrome, isolated headless browser, backend qB/Jellyfin simulated, actual video decoding"
+    },
+    {
+      "id": "E-review",
+      "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/review.txt",
+      "sha256": "2eebf57939f7aeb8480305c258dc392d0e566e589d9ac645f9f57d575b967e2e",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Autorrevisión, sintaxis y git diff --check de archivos modificados por esta tarea"
+    },
+    {
+      "id": "E-visual",
+      "path": "/Users/jorge/No sync/Proyectos/Production/JRPlex/.gauntlet/magnet-drive/drive.png",
+      "sha256": "06a4fc03d2b29b2ece5911970cf38fbbeece3ab59c54560bd52ef2aca510e326",
+      "version": "b22e4fad504438c63702d34260448cc7b562c91f5db521f010ff75434e5af0b9",
+      "method": "Captura real de Chrome; inspeccionada con view_image"
+    }
+  ],
+  "defects": [
+    {
+      "id": "D1",
+      "severity": "major",
+      "status": "verified",
+      "impact": "Magnets nuevos o multifichero no reproducen",
+      "cause": "Apertura antes de piezas y content_path usado como archivo",
+      "correction": "Esperar verificación, resolver archivo relativo, .!qB y rangos de archivo parcial",
+      "verification_checks": [
+        "C-tests",
+        "C-browser"
+      ]
+    },
+    {
+      "id": "D2",
+      "severity": "major",
+      "status": "verified",
+      "impact": "Reproductor permanece cargando sin explicación útil",
+      "cause": "Mensajes HTTP descartados y fallos play() genéricos; sin estado/timeout visible",
+      "correction": "Estado administrativo, errores persistentes, espera limitada y reintento",
+      "verification_checks": [
+        "C-tests",
+        "C-browser"
+      ]
+    },
+    {
+      "id": "D3",
+      "severity": "major",
+      "status": "verified",
+      "impact": "Fotos y accesos Drive incluyen toda la raíz",
+      "cause": "Acceso de fotos crea biblioteca automáticamente sin selección",
+      "correction": "Formulario y selector de carpeta por películas/fotos/música",
+      "verification_checks": [
+        "C-browser",
+        "C-review"
+      ]
+    }
+  ],
+  "limitations": [
+    "No se comprobó un swarm real ni el magnet del usuario.",
+    "No se desplegó esta revisión ni se modificaron rutas reales de Drive.",
+    "Una prueba rclone opcional omitida; no afecta el código modificado.",
+    "Autorrevisión; sin revisión independiente, no requerida por riesgo local moderado."
+  ],
+  "capabilities": [
+    {
+      "name": "Archivos y Git",
+      "available": true,
+      "constraints": "styles.css preexistente preservado",
+      "observed": "Lectura, diff y escritura local disponibles",
+      "alternative": ""
+    },
+    {
+      "name": "Node, Python y FFmpeg",
+      "available": true,
+      "constraints": "Puertos loopback requieren ejecución escalada",
+      "observed": "Node v24.19.0, Python3, FFmpeg/ffprobe reales; pruebas completas",
+      "alternative": ""
+    },
+    {
+      "name": "Navegador",
+      "available": true,
+      "constraints": "Backend simulado y vídeo sintético; no cuentas reales",
+      "observed": "Chrome/Playwright: reproducción, selección y error persistente comprobados",
+      "alternative": ""
+    }
+  ]
+}

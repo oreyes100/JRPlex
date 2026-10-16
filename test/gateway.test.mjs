@@ -417,3 +417,18 @@ test('trusted exact proxy IP honors X-Real-IP; untrusted spoofing cannot bypass 
   assert.deepEqual(loadConfig({ TRUSTED_PROXY_IPS: '::ffff:127.0.0.1, ::1' }).trustedProxyIps, ['127.0.0.1', '::1']);
   assert.throws(() => loadConfig({ TRUSTED_PROXY_IPS: '10.0.0.0/8' }), /exact IP/);
 });
+
+
+test('torrent status is admin-only and preserves actionable errors without exposing the torrent path', async (t) => {
+  const id = 'a'.repeat(24); const calls = [];
+  const torrentClient = { status: async (value) => { calls.push(value); return { peers: 0, downloadSpeed: 0, progress: 0, error: 'No llegaron piezas verificadas.' }; } };
+  const f = await fixture(t, {}, { torrentClient });
+  assert.equal((await f.request(`/api/admin/torrents/${id}/status`)).status, 401);
+  const session = await f.login();
+  const response = await f.request(`/api/admin/torrents/${id}/status`, { headers: { Cookie: session.cookie } });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).error, 'No llegaron piezas verificadas.');
+  f.state.admin = false;
+  assert.equal((await f.request(`/api/admin/torrents/${id}/status`, { headers: { Cookie: session.cookie } })).status, 403);
+  assert.deepEqual(calls, [id]);
+});

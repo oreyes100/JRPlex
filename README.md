@@ -70,6 +70,8 @@ Prueba también desde una red exterior con navegador: acceso, reproducción, bú
 - [Windows y macOS nativos](deploy/NATIVE.md): mismo gateway, motor nativo y arranque del sistema.
 - [Respaldo, restauración y mantenimiento](deploy/OPERATIONS.md): parada consistente, copia privada, verificación en entorno aislado y retirada reversible.
 
+Para elegir las rutas de Drive, abre **Administración → Bibliotecas y nube** y pulsa **Elegir carpeta de películas/fotos/música de Drive**. Entra en la subcarpeta deseada, pulsa **Usar esta carpeta**, revisa nombre, contenido y ruta, y pulsa **Conectar biblioteca**. También puedes escribir la ruta completa que ve Jellyfin, por ejemplo `/media/cloud/Media/Musica`. Cada tipo de contenido se registra por separado; el contenido aparece al terminar su escaneo.
+
 ## Límites que se deben validar
 
 JRPlex 0.1 no incluye aplicaciones propias para TV/móvil, DRM, catálogo comercial, TV/DVR, descargas offline ni federación con cuentas Plex. Codec, transcodificación por CPU/GPU, 4K, HDR y número de usuarios simultáneos dependen del host y requieren pruebas. Una fuente remota debe sostener el bitrate y permitir lectura por rangos; pueden existir costes del proveedor, límites de API y expiración de OAuth.

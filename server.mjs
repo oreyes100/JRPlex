@@ -300,6 +300,8 @@ export function createApp(config = loadConfig(), options = {}) {
           }
           if (route === '/api/admin/torrents' && req.method === 'GET') { send(res, 200, { torrents: await torrent.list() }); return; }
           if (route === '/api/admin/torrents' && req.method === 'POST') { send(res, 201, await torrent.add(await body(req))); return; }
+          const statusMatch = route.match(/^\/api\/admin\/torrents\/([A-Za-z0-9_-]{24})\/status$/);
+          if (statusMatch && req.method === 'GET') { send(res, 200, await torrent.status(statusMatch[1])); return; }
           const playMatch = route.match(/^\/api\/admin\/torrents\/([A-Za-z0-9_-]{24})\/play$/);
           if (playMatch && req.method === 'POST') { const input = await body(req); send(res, 200, await torrent.play(playMatch[1], input.fileIndex)); return; }
           const streamMatch = route.match(/^\/api\/admin\/torrents\/([A-Za-z0-9_-]{24})\/stream\/(\d+)$/);

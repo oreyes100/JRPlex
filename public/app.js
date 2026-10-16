@@ -78,7 +78,11 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     if (response.status === 401) { showLogin('La sesión ha terminado. Vuelve a entrar.'); const error = new Error('Sesión terminada.'); error.status = 401; throw error; }
     if (!response.ok) {
       const messages = { 400: 'Revisa los datos introducidos.', 403: 'No tienes permiso para esta acción o el servidor rechazó la solicitud.', 404: 'El elemento ya no está disponible.', 409: 'Este enlace ya está agregado al servicio de torrents y JRPlex no modificó esa descarga. Si ya aparece en JRPlex, abre su sesión activa.', 413: 'El archivo supera el tamaño permitido.', 429: 'Se han realizado demasiados intentos. Espera un momento.', 502: 'El servidor multimedia o qBittorrent no está disponible.', 503: 'Este servicio todavía no está configurado o no está disponible.', 504: 'El torrent no entregó metadatos o piezas a tiempo. Comprueba que tenga pares activos e inténtalo de nuevo.' };
-      const error = new Error(messages[response.status] || `No se pudo completar la operación (${response.status}).`); error.status = response.status; throw error;
+      let detail;
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        try { const payload = await response.json(); if (typeof payload.error === 'string' && payload.error.length <= 1024) detail = payload.error; } catch {}
+      }
+      const error = new Error(detail || messages[response.status] || `No se pudo completar la operación (${response.status}).`); error.status = response.status; throw error;
     }
     if (response.status === 204) return null;
     const text = await response.text();
@@ -522,10 +526,16 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     const folderSearch = el('input', { type: 'search', maxLength: 160, placeholder: 'Filtrar carpetas', 'aria-label': 'Filtrar carpetas' });
     const folderList = el('div', { class: 'folder-picker-list' }); const folderStatus = el('p', { class: 'note', role: 'status' });
     const useFolder = el('button', { type: 'button', class: 'small-button' }, 'Usar esta carpeta');
-    let currentRelative = ''; let currentAbsolute = '';
+    let currentRelative = ''; let currentAbsolute = ''; let folderRequest = 0;
     const loadFolders = async () => {
+      const request = ++folderRequest; useFolder.disabled = true; currentAbsolute = '';
+      folderStatus.textContent = 'Cargando carpetas…'; folderList.replaceChildren();
       const query = new URLSearchParams({ source: source.value, path: currentRelative, search: folderSearch.value.trim() });
-      const listing = await api(`/api/admin/folders?${query}`); currentAbsolute = listing.currentPath;
+      let listing;
+      try { listing = await api(`/api/admin/folders?${query}`); }
+      catch (error) { if (request === folderRequest) { folderStatus.textContent = error.message; folderList.replaceChildren(); } throw error; }
+      if (request !== folderRequest || generation !== state.generation) return;
+      currentAbsolute = listing.currentPath; useFolder.disabled = false;
       folderStatus.textContent = `Carpeta actual: ${currentAbsolute}`;
       folderList.replaceChildren();
       const parent = currentRelative.split('/').filter(Boolean).slice(0, -1).join('/');
@@ -543,12 +553,11 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     form.addEventListener('submit', event => { event.preventDefault(); void busy(submit, async () => {
       const value = path.value.trim(); if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value)) throw new Error('Introduce una ruta absoluta accesible por Jellyfin.');
       const query = new URLSearchParams({ name: name.value.trim(), refreshLibrary: 'true' }); if (type.value) query.set('collectionType', type.value);
-      await api(`/jellyfin/Library/VirtualFolders?${query}`, { method: 'POST', body: { LibraryOptions: { PathInfos: [{ Path: value }], EnableRealtimeMonitor: false, SaveLocalMetadata: false } } });
+      await api(`/jellyfin/Library/VirtualFolders?${query}`, { method: 'POST', body: { LibraryOptions: { PathInfos: [{ Path: value }], ...(type.value === 'photos' ? { EnablePhotos: true } : {}), EnableRealtimeMonitor: false, SaveLocalMetadata: false } } });
       notify('Biblioteca añadida. El contenido aparecerá tras la exploración.'); await navigate('admin');
     }); });
     const cloudRoot = '/media/cloud';
     const cloudRegistered = (libraries || []).some(library => (library.Locations || []).some(location => location === cloudRoot || location.startsWith(`${cloudRoot}/`)));
-    const cloudPhotosRegistered = (libraries || []).some(library => String(library.CollectionType || '').toLowerCase() === 'photos' && (library.Locations || []).some(location => location === cloudRoot || location.startsWith(`${cloudRoot}/`)));
     const driveStatus = await api('/api/admin/google-drive/status');
     const connectDrive = button(driveStatus.linked ? 'Volver a vincular Google Drive' : 'Vincular Google Drive', async () => {
       const result = await api('/api/admin/google-drive/connect', { method: 'POST', body: {} });
@@ -557,18 +566,16 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       window.location.assign(destination.href);
     }, 'primary');
     connectDrive.disabled = !driveStatus.configured;
-    const prepareCloud = button('Preparar ruta /media/cloud', () => {
-      name.value = 'Google Drive'; type.value = 'movies'; path.value = cloudRoot; path.focus();
-      notify('Ruta preparada. Conecta la biblioteca cuando el montaje de solo lectura esté activo.');
-    }, 'small-button');
-    const preparePhotos = button(cloudPhotosRegistered ? 'Buscar fotos nuevas' : 'Preparar fotos de Google Drive', async () => {
-      if (!cloudPhotosRegistered) {
-        const query = new URLSearchParams({ name: 'Fotos de Google Drive', collectionType: 'photos', refreshLibrary: 'true' });
-        await api(`/jellyfin/Library/VirtualFolders?${query}`, { method: 'POST', body: { LibraryOptions: { PathInfos: [{ Path: cloudRoot }], EnablePhotos: true, EnableRealtimeMonitor: false, SaveLocalMetadata: false } } });
-      } else await api('/jellyfin/Library/Refresh', { method: 'POST' });
-      notify('Exploración de fotos solicitada. Las carpetas aparecerán cuando Jellyfin termine de indexarlas.');
-      await navigate('admin');
-    }, 'primary');
+    const prepareDrive = async (contentType, label) => {
+      name.value = `${label} de Google Drive`; type.value = contentType;
+      source.value = 'cloud'; currentRelative = ''; folderSearch.value = ''; path.value = '';
+      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      await loadFolders();
+      path.focus(); notify(`Elige la carpeta de Drive para ${label.toLowerCase()} y pulsa “Usar esta carpeta”.`);
+    };
+    const prepareCloud = button('Elegir carpeta de películas de Drive', () => prepareDrive('movies', 'Películas'), 'small-button');
+    const preparePhotos = button('Elegir carpeta de fotos de Drive', () => prepareDrive('photos', 'Fotos'), 'small-button');
+    const prepareMusic = button('Elegir carpeta de música de Drive', () => prepareDrive('music', 'Música'), 'small-button');
     const cloud = panel('Contenido en la nube',
       el('p', { class: 'note' }, 'Vincula Google desde su página oficial. JRPlex nunca solicita tu contraseña; guarda la autorización cifrada en el servidor. El montaje de rclone debe permanecer en solo lectura y se verifica por separado antes de compartir la biblioteca.'),
       el('div', { class: 'cloud-state' },
@@ -582,8 +589,8 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       el('p', { class: 'note' }, 'Aviso de privacidad: para mostrar y reproducir el contenido, JRPlex lee los nombres, metadatos y archivos visibles en el Drive vinculado. La autorización se limita a lectura; el servidor conserva los tokens cifrados. ', el('a', { href: '/privacy' }, 'Consulta cómo se usan, protegen y eliminan estos datos.')),
       el('p', { class: 'note' }, 'Se solicita solo lectura. Usa una cuenta de Google dedicada que tenga acceso únicamente a tus medios; el permiso cubre los archivos visibles para esa cuenta.'),
       prepareCloud,
-      el('p', { class: 'note' }, cloudPhotosRegistered ? 'La biblioteca de fotos de Drive ya está registrada.' : 'Añade una biblioteca independiente de tipo Fotografías para recorrer carpetas y ver presentaciones; no reemplaza la biblioteca de películas.'),
-      preparePhotos);
+      el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, fotografías y música. También puedes escribir la ruta completa bajo /media/cloud en el formulario y conectar la biblioteca después de revisarla.'),
+      preparePhotos, prepareMusic);
     body.append(el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
   }
   async function adminTorrents(body, generation) {
@@ -591,11 +598,14 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     const file = inputField(form, 'O archivo .torrent · máximo 1 MiB', { type: 'file', accept: '.torrent,application/x-bittorrent' }); const submit = el('button', { type: 'submit', class: 'primary' }, 'Buscar vídeo en el torrent'); form.append(submit);
     const list = panel('Vídeos disponibles', el('p', {}, 'Añade un enlace para ver sus vídeos reproducibles.')); const playerArea = el('div', {});
     body.append(panel('Reproducir desde torrent', el('p', { class: 'note' }, 'El vídeo empieza mientras llegan sus piezas; no se espera a que termine la descarga ni se agrega a tu biblioteca. JRPlex usa una caché temporal de piezas y la borra al detener la reproducción o cuando la sesión queda inactiva.'), form), list, playerArea);
-    const stopPlayback = async (id, video, stopFn) => {
+    let playbackPoll; let playbackIntent = 0;
+    const stopPlayback = async (id, video, stopFn, keepId) => {
       if (state.torrentStop !== stopFn) return;
+      clearTimeout(playbackPoll); playbackIntent++;
       state.torrentStop = null; video.pause(); video.removeAttribute('src'); video.load(); playerArea.replaceChildren();
-      try { await api(`/api/admin/torrents/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} }); } catch {}
-      notify('Reproducción detenida; la caché temporal del torrent se eliminó.');
+      if (keepId === id) return;
+      try { await api(`/api/admin/torrents/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} }); notify('Reproducción detenida; la caché temporal del torrent se eliminó.'); }
+      catch (error) { notify(`Reproducción detenida. No se pudo confirmar la limpieza: ${error.message}`, true); }
     };
     const showSession = async (session) => {
       const files = (session.files || []).filter(item => Number.isSafeInteger(item.index) && Number(item.size) > 0);
@@ -604,26 +614,54 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       for (const item of files) {
         const label = `${item.name} · ${formatBytes(item.size)}`;
         const playButton = button('▷ Reproducir', async () => { await busy(playButton, async () => {
+          if (state.torrentStop) await state.torrentStop(session.id);
+          const intent = ++playbackIntent;
           const result = await api(`/api/admin/torrents/${encodeURIComponent(session.id)}/play`, { method: 'POST', body: { fileIndex: item.index } });
+          if (intent !== playbackIntent || generation !== state.generation) return;
           playerArea.replaceChildren();
           const video = el('video', { class: 'torrent-video', controls: true, playsInline: true, preload: 'auto' }); video.src = result.streamUrl;
           const playbackStatus = el('p', { class: 'note', role: 'status' }, 'Esperando las primeras piezas verificadas del torrent…');
-          const stop = () => stopPlayback(session.id, video, stop); state.torrentStop = stop;
+          const stop = (keepId) => stopPlayback(session.id, video, stop, keepId); stop.sessionId = session.id; state.torrentStop = stop;
+          let playbackFailed = false; let lastTime = 0; let lastAdvance = Date.now();
+          const failPlayback = (message) => {
+            if (playbackFailed || state.torrentStop !== stop) return;
+            playbackFailed = true; clearTimeout(playbackPoll);
+            playbackStatus.textContent = message; playbackStatus.setAttribute('role', 'alert');
+            video.pause(); video.removeAttribute('src'); video.load(); notify(message, true);
+          };
+          const checkStatus = async () => {
+            if (state.torrentStop !== stop || playbackFailed) return;
+            try {
+              const status = await api(`/api/admin/torrents/${encodeURIComponent(session.id)}/status`, { signal: AbortSignal.timeout(10000) });
+              if (state.torrentStop !== stop || playbackFailed) return;
+              if (status.error) { failPlayback(status.error); return; }
+              if (video.currentTime > lastTime) { lastTime = video.currentTime; lastAdvance = Date.now(); }
+              if (video.readyState < 3 && Date.now() - lastAdvance > 65000) { failPlayback('No llegaron datos reproducibles durante 65 segundos. Revisa los pares del torrent y vuelve a pulsar Reproducir.'); return; }
+              if (video.readyState < 3) playbackStatus.textContent = `Esperando piezas verificadas · ${status.peers} pares · ${formatBytes(status.downloadSpeed)}/s · ${Math.round(status.progress * 100)} % en caché`;
+            } catch (error) { failPlayback(error.message); return; }
+            playbackPoll = setTimeout(checkStatus, 2000);
+          };
+          void checkStatus();
           video.addEventListener('ended', () => void stop());
-          video.addEventListener('waiting', () => { playbackStatus.textContent = 'Esperando más piezas del torrent para mantener la reproducción…'; });
-          video.addEventListener('playing', () => { playbackStatus.textContent = 'Reproduciendo desde el torrent; JRPlex convierte el formato si el navegador lo necesita.'; });
-          video.addEventListener('stalled', () => { playbackStatus.textContent = 'La fuente dejó de enviar datos. Puede que el torrent no tenga pares activos.'; });
+          video.addEventListener('waiting', () => { if (playbackFailed) return; playbackStatus.textContent = 'Esperando más piezas del torrent para mantener la reproducción…'; });
+          video.addEventListener('playing', () => { if (playbackFailed) return; lastAdvance = Date.now(); playbackStatus.textContent = 'Reproduciendo desde el torrent; JRPlex convierte el formato si el navegador lo necesita.'; });
+          video.addEventListener('stalled', () => { if (playbackFailed) return; playbackStatus.textContent = 'La fuente dejó de enviar datos. Puede que el torrent no tenga pares activos.'; });
           video.addEventListener('error', () => {
+            if (playbackFailed || state.torrentStop !== stop) return;
             const code = video.error?.code;
-            playbackStatus.textContent = code === 4 ? 'El navegador no reconoce el formato de salida. Revisa el nombre y formato del archivo.' : 'La fuente de torrent no entregó datos reproducibles. Comprueba que tenga pares activos.';
-            notify(playbackStatus.textContent, true);
+            const message = code === 4 ? 'El navegador no reconoce el formato de salida. Revisa el nombre y formato del archivo.' : 'La fuente de torrent no entregó datos reproducibles. Comprueba que tenga pares activos.';
+            void api(`/api/admin/torrents/${encodeURIComponent(session.id)}/status`).then(status => failPlayback(status.error || message), () => failPlayback(message));
           });
           playerArea.append(panel('Reproductor temporal', playbackStatus, el('p', { class: 'note' }, 'Se lee por piezas desde el torrent; los formatos no compatibles con el navegador se convierten en el servidor. Pulsa “Detener” al terminar para borrar el búfer.'), video, button('Detener y borrar búfer', stop, 'small-button')));
-          try { await video.play(); } catch { playbackStatus.textContent = 'Pulsa reproducir en el control de vídeo para iniciar la transmisión.'; }
+          try { await video.play(); } catch (error) { if (error.name === 'NotAllowedError' && !playbackFailed) playbackStatus.textContent = 'Pulsa reproducir en el control de vídeo para iniciar la transmisión.'; }
         }); });
         section.append(el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, label, el('small', {}, `${Math.round(Math.max(0, Math.min(1, Number(item.progress) || 0)) * 100)} % de piezas disponibles en caché`)), playButton));
       }
-      section.append(button('Quitar enlace y borrar piezas', async () => { await api(`/api/admin/torrents/${encodeURIComponent(session.id)}`, { method: 'DELETE', body: {} }); await refresh(); notify('Torrent y caché temporal eliminados.'); }, 'small-button'));
+      section.append(button('Quitar enlace y borrar piezas', async () => {
+        if (state.torrentStop?.sessionId === session.id) await state.torrentStop();
+        else await api(`/api/admin/torrents/${encodeURIComponent(session.id)}`, { method: 'DELETE', body: {} });
+        await refresh();
+      }, 'small-button'));
       return section;
     };
     const refresh = async () => {
@@ -642,7 +680,12 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
         const encoded = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('No se pudo leer el archivo.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(selected); });
         payload = { torrentBase64: encoded, filename: selected.name };
       } else { if (!magnet.value.trim().startsWith('magnet:?')) throw new Error('Se necesita un enlace magnet válido; las URL remotas .torrent no están habilitadas.'); payload = { url: magnet.value.trim() }; }
-      await api('/api/admin/torrents', { method: 'POST', body: payload }); form.reset(); notify('Torrent listo. Elige el vídeo que quieres reproducir.'); await refresh();
+      const status = el('p', { class: 'note', role: 'status' }, 'Buscando metadatos y pares del torrent… Puede tardar hasta 90 segundos.');
+      form.append(status);
+      try {
+        await api('/api/admin/torrents', { method: 'POST', body: payload, signal: AbortSignal.timeout(100000) });
+        form.reset(); status.textContent = 'Torrent listo. Elige el vídeo que quieres reproducir.'; await refresh();
+      } catch (error) { status.className = 'form-error'; status.setAttribute('role', 'alert'); status.textContent = error.message; throw error; }
     }); });
     await refresh();
   }
