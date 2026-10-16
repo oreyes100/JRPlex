@@ -370,7 +370,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const app = createApp(); const { server, config } = app;
     server.listen(config.port, config.host, () => process.stdout.write(`JRPlex gateway listening on ${config.host}:${config.port}\n`));
     let stopping = false;
-    const stop = () => { if (stopping) return; stopping = true; server.close(); void app.close().finally(() => process.exit(0)); setTimeout(() => process.exit(1), 15000).unref(); };
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      server.close();
+      setTimeout(() => process.exit(1), 15000).unref();
+      void Promise.resolve().then(() => app.close()).then(() => process.exit(0), () => process.exit(1));
+    };
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
   } catch { process.stderr.write('JRPlex configuration is invalid; check local environment and secret files.\n'); process.exitCode = 1; }
 }
