@@ -5,9 +5,9 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HttpError, loadConfig, opaque, equal, safePath, cleanQuery, sanitizeJson, rewritePlaylist, boundedBody, requireStrongPassword, normalizeIp } from './lib/security.mjs';
-import { replaceLibraryPath } from './lib/library-mapping.mjs';
+import { mediaFolderPath, replaceLibraryPath } from './lib/library-mapping.mjs';
 import { createTorrentClient } from './lib/torrents.mjs';
-import { createGoogleDriveOAuth } from './lib/google-drive-oauth.mjs';
+import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
 
 export { loadConfig } from './lib/security.mjs';
@@ -90,6 +90,16 @@ export function createApp(config = loadConfig(), options = {}) {
     return user;
   }
   async function requireAdmin(session) { const user = await currentUser(session); if (!user.Policy?.IsAdministrator) throw new HttpError(403, 'Administrator required'); return user; }
+  function isDriveFolderLink(value) {
+    if (typeof value !== 'string') return false;
+    try { const url = new URL(value); return url.origin === 'https://drive.google.com' && url.pathname.startsWith('/drive/folders/'); } catch { return false; }
+  }
+  async function resolveLibraryPath(value) {
+    if (!isDriveFolderLink(value)) return mediaFolderPath(value);
+    googleDriveFolderIdFromUrl(value);
+    if (typeof googleOAuth.resolveFolderUrl !== 'function') throw new HttpError(503, 'La exploración de Google Drive no está disponible en este servidor.');
+    return mediaFolderPath(await googleOAuth.resolveFolderUrl(value));
+  }
   async function authorizeItem(session, itemId) {
     const response = await upstream(`/Users/${encodeURIComponent(session.user.Id)}/Items/${encodeURIComponent(itemId)}`, { session });
     await response.body?.cancel();
@@ -138,6 +148,15 @@ export function createApp(config = loadConfig(), options = {}) {
     if (mutation(req.method)) {
       csrf(req, session);
       const parsed = await body(req);
+      if (path === '/Library/VirtualFolders' && req.method === 'POST' && Array.isArray(parsed.LibraryOptions?.PathInfos)) {
+        for (const info of parsed.LibraryOptions.PathInfos) {
+          if (!isDriveFolderLink(info?.Path)) continue;
+          info.Path = await resolveLibraryPath(info.Path);
+          const check = await upstream('/Environment/DirectoryContents?' + new URLSearchParams({ path: info.Path, includeFiles: 'false', includeDirectories: 'true' }), { session });
+          await check.body?.cancel();
+          if (!check.ok) throw new HttpError(400, 'Jellyfin no puede leer esa carpeta de Drive en el servidor. Selecciónala desde el explorador de carpetas.');
+        }
+      }
       if (path === '/Library/VirtualFolders' && req.method === 'POST' && url.searchParams.get('collectionType') === 'photos') {
         url.searchParams.set('collectionType', 'homevideos');
         parsed.LibraryOptions = { ...parsed.LibraryOptions, EnablePhotos: true };
@@ -278,9 +297,15 @@ export function createApp(config = loadConfig(), options = {}) {
             const input = await body(req); const id = mappingMatch[1];
             if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca ya está guardando una ruta.');
             mappingOperations.add(id);
-            try { send(res, 200, await replaceLibraryPath({ id, input, session, upstream, jsonResponse })); }
+            try { send(res, 200, await replaceLibraryPath({ id, input: { ...input, path: await resolveLibraryPath(input.path) }, session, upstream, jsonResponse })); }
             finally { mappingOperations.delete(id); }
             return;
+          }
+          if (route === '/api/admin/google-drive/folders' && req.method === 'GET') {
+            if (typeof googleOAuth.listFolders !== 'function') throw new HttpError(503, 'La exploración de Google Drive no está disponible en este servidor.');
+            const query = new URL(req.url, config.publicUrl).searchParams;
+            if (query.getAll('parentId').length > 1 || query.getAll('pageToken').length > 1) throw new HttpError(400, 'La página solicitada no es válida.');
+            send(res, 200, await googleOAuth.listFolders(query.get('parentId') || '', query.get('pageToken') || '')); return;
           }
           if (route === '/api/admin/folders' && req.method === 'GET') {
             const query = new URL(req.url, config.publicUrl);

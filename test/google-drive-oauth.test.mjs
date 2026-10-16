@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createGoogleDriveOAuth, readGoogleDriveMountCredentials } from '../lib/google-drive-oauth.mjs';
+import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl, readGoogleDriveMountCredentials } from '../lib/google-drive-oauth.mjs';
 
 const redirectUri = 'https://jrplexps.duckdns.org/api/google-drive/callback';
 const driveScope = 'https://www.googleapis.com/auth/drive.readonly';
@@ -80,4 +80,52 @@ test('Google status does not reveal an absent client or authorization details', 
   const files = await setup(t);
   const oauth = createGoogleDriveOAuth({ ...files.config, googleOAuthClientFile: '', googleOAuthKeyFile: '' }, { projectRoot: files.projectRoot });
   assert.deepEqual(await oauth.status(), { configured: false, linked: false, mountVerified: false });
+});
+
+test('Google Drive folder links resolve to mounted paths and folder browsing uses refreshed read-only authorization', async (t) => {
+  const files = await setup(t); let current = Date.parse('2026-10-16T12:00:00Z'); const calls = []; let refreshCalls = 0;
+  const ids = { child: 'southparkfolder123456', parent: 'seriesfolder12345678', root: 'mydrivefolder123456789' };
+  const oauth = createGoogleDriveOAuth(files.config, { projectRoot: files.projectRoot, now: () => current, fetcher: async (url, options) => {
+    const target = new URL(url);
+    if (target.href === 'https://oauth2.googleapis.com/token') {
+      const form = new URLSearchParams(options.body);
+      if (form.get('grant_type') === 'authorization_code') return new Response(JSON.stringify({ access_token: 'ACCESS_OLD', refresh_token: 'REFRESH_KEEP', expires_in: 3600, scope: driveScope }), { status: 200 });
+      refreshCalls++;
+      assert.equal(form.get('grant_type'), 'refresh_token');
+      return new Response(JSON.stringify({ access_token: 'ACCESS_FRESH', expires_in: 3600 }), { status: 200 });
+    }
+    calls.push({ target, authorization: options.headers.Authorization });
+    assert.equal(options.headers.Authorization, 'Bearer ACCESS_FRESH');
+    if (target.pathname.endsWith('/files')) {
+      assert.equal(target.searchParams.get('includeItemsFromAllDrives'), 'true');
+      if (target.searchParams.has('pageToken')) {
+        assert.equal(target.searchParams.get('pageToken'), 'next-page');
+        assert.match(target.searchParams.get('q'), /'seriesfolder12345678' in parents/);
+        return new Response(JSON.stringify({ files: [{ id: ids.child, name: 'South Park', mimeType: 'application/vnd.google-apps.folder' }] }), { status: 200 });
+      }
+      assert.match(target.searchParams.get('q'), /'root' in parents/);
+      return new Response(JSON.stringify({ files: [{ id: ids.parent, name: 'Series', mimeType: 'application/vnd.google-apps.folder' }, { id: 'fileid1234567890', name: 'video.mp4', mimeType: 'video/mp4' }], nextPageToken: 'next-page' }), { status: 200 });
+    }
+    const id = target.pathname.split('/').at(-1);
+    const rows = {
+      [ids.child]: { id: ids.child, name: 'South Park', mimeType: 'application/vnd.google-apps.folder', parents: [ids.parent] },
+      [ids.parent]: { id: ids.parent, name: 'Series', mimeType: 'application/vnd.google-apps.folder', parents: [ids.root] },
+      [ids.root]: { id: ids.root, name: 'My Drive', mimeType: 'application/vnd.google-apps.folder', parents: [] },
+    };
+    return rows[id] ? new Response(JSON.stringify(rows[id]), { status: 200 }) : new Response('{}', { status: 404 });
+  } });
+  const authorization = new URL(await oauth.start());
+  await oauth.callback(`${redirectUri}?code=one-time-code&state=${authorization.searchParams.get('state')}`);
+  current += 3600 * 1000;
+
+  const listing = await oauth.listFolders();
+  assert.deepEqual(listing, { parentId: null, folders: [{ id: ids.parent, name: 'Series' }], nextPageToken: 'next-page' });
+  assert.deepEqual(await oauth.listFolders(ids.parent, listing.nextPageToken), { parentId: ids.parent, folders: [{ id: ids.child, name: 'South Park' }], nextPageToken: null });
+  assert.equal(refreshCalls, 1);
+  assert.equal(await oauth.resolveFolderUrl(`https://drive.google.com/drive/folders/${ids.child}?hl=es-419`), '/media/cloud/Series/South Park');
+  assert.equal(calls.length, 5, 'lists two pages and reads each folder ancestor');
+  assert.equal(googleDriveFolderIdFromUrl(`https://drive.google.com/drive/folders/${ids.child}?hl=es-419`), ids.child);
+  assert.equal(googleDriveFolderIdFromUrl('https://drive.google.com/drive/folders/fixturefolder123456789?hl=es-419'), 'fixturefolder123456789');
+  assert.throws(() => googleDriveFolderIdFromUrl(`https://drive.google.com/drive/folders/${ids.child}#fragment`), /formato/);
+  await assert.rejects(oauth.listFolders('../invalid'), /identificador/);
 });

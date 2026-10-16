@@ -14,6 +14,12 @@ const generated = spawnSync('ffmpeg', ['-v','error','-f','lavfi','-i','testsrc2=
 assert.equal(generated.status,0,generated.stderr?.toString());
 const videoBytes = await readFile(path.join(root,'template.mp4'));
 const libraries = []; const hash='a'.repeat(40); let added=false; let pieces=0; let qbState='downloading';
+const driveTree = {
+  '': [{ id: 'mediafolder123456789', name: 'Media' }],
+  mediafolder123456789: [{ id: 'moviesfolder123456789', name: 'Peliculas' }, { id: 'photosfolder123456789', name: 'Fotos' }, { id: 'musicfolder123456789', name: 'Musica' }],
+  moviesfolder123456789: [], photosfolder123456789: [], musicfolder123456789: [],
+};
+const drivePaths = { moviesfolder123456789: '/media/cloud/Media/Peliculas', photosfolder123456789: '/media/cloud/Media/Fotos', musicfolder123456789: '/media/cloud/Media/Musica' };
 const qbFetch = async (url) => {
   const u = new URL(url); const route=u.pathname.replace('/api/v2/','');
   if(route==='auth/login') return new Response('Ok.',{headers:{'set-cookie':'SID=fixture'}});
@@ -52,7 +58,7 @@ const start=async(server)=>{server.listen(0,'127.0.0.1');await once(server,'list
 const upstream=await start(media);
 const config={...loadConfig({JELLYFIN_URL:upstream,PUBLIC_URL:'http://127.0.0.1:8787'}),qbUrl:'http://127.0.0.1:8080',qbUsername:'fixture',qbPassword:'fixture',torrentFilesDir:root};
 const torrentClient=createTorrentClient(config,{fetch:qbFetch});
-const app=createApp(config,{torrentClient,cloudMountStatus:async()=>true,googleOAuth:{callbackPath:'/api/google-drive/callback',status:async()=>({linked:true,configured:true})}});
+const app=createApp(config,{torrentClient,cloudMountStatus:async()=>true,googleOAuth:{callbackPath:'/api/google-drive/callback',status:async()=>({linked:true,configured:true}),listFolders:async(parentId,pageToken)=>({parentId:parentId||null,folders:!parentId&&pageToken?[{id:'archivefolder123456789',name:'Archive'}]:driveTree[parentId]||[],nextPageToken:!parentId&&!pageToken?'drive-page-2':null}),resolveFolderUrl:async value=>drivePaths[new URL(value).pathname.split('/').at(-1)]}});
 const base=await start(app.server);config.publicUrl=base;
 let browser;
 try {
@@ -62,18 +68,28 @@ try {
   await page.locator('#admin-nav').click();await page.getByRole('tab',{name:'Bibliotecas y nube'}).click();
   for(const [label,folder,type] of [['películas','Peliculas','movies'],['fotos','Fotos','homevideos'],['música','Musica','music']]) {
     await page.getByRole('button',{name:`Elegir carpeta de ${label} de Drive`,exact:true}).click();
-    await page.getByRole('button',{name:'▰ Media',exact:true}).click();
-    await page.getByRole('button',{name:`▰ ${folder}`,exact:true}).click();
-    await page.getByText(`Carpeta actual: /media/cloud/Media/${folder}`,{exact:true}).waitFor();
-    await page.getByRole('button',{name:'Usar esta carpeta',exact:true}).click();
-    assert.equal(await page.getByLabel('Ruta absoluta que ve el servidor',{exact:true}).inputValue(),`/media/cloud/Media/${folder}`);
+    const folderId = { Peliculas:'moviesfolder123456789', Fotos:'photosfolder123456789', Musica:'musicfolder123456789' }[folder];
+    const pathField = page.getByLabel('Ruta del servidor o enlace de Google Drive',{exact:true});
+    if(type==='movies') {
+      await pathField.fill(`https://drive.google.com/drive/folders/${folderId}?hl=es-419`);
+    } else {
+      if(label==='fotos') {
+        await page.getByRole('button',{name:'Cargar más carpetas',exact:true}).click();
+        await page.getByRole('button',{name:'▰ Archive',exact:true}).waitFor();
+      }
+      await page.getByRole('button',{name:'▰ Media',exact:true}).click();
+      await page.getByRole('button',{name:`▰ ${folder}`,exact:true}).click();
+      await page.getByText(`Carpeta actual: Media / ${folder} · https://drive.google.com/drive/folders/${folderId}`,{exact:true}).waitFor();
+      await page.getByRole('button',{name:'Usar esta carpeta',exact:true}).click();
+    }
+    assert.match(await pathField.inputValue(),new RegExp(`^https://drive\\.google\\.com/drive/folders/${folderId}`));
     await page.getByRole('button',{name:'Conectar biblioteca',exact:true}).click();
     await page.getByText(`/media/cloud/Media/${folder}`,{exact:true}).waitFor();
     assert.equal(libraries.at(-1).CollectionType,type);assert.deepEqual(libraries.at(-1).Locations,[`/media/cloud/Media/${folder}`]);
   }
   assert.equal(libraries.find(l=>l.CollectionType==='homevideos').LibraryOptions.EnablePhotos,true);
   assert.equal(libraries.length,3,'shortcuts do not create root libraries');
-  console.log('PASS Drive: movies/photos/music each save their explicitly selected nested folder');
+  console.log('PASS Drive: pasted folder links and browsed photos/music folders save to their nested paths');
   await mkdir(path.join(process.cwd(),'.gauntlet/production-fix'),{recursive:true});
   await page.screenshot({path:path.join(process.cwd(),'.gauntlet/production-fix/fixture-drive.png'),fullPage:true});
   await page.locator('[data-view=folders]').click();

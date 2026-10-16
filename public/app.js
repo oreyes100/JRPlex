@@ -534,16 +534,41 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     listing.append(button('Buscar contenido nuevo', async () => { await api('/jellyfin/Library/Refresh', { method: 'POST' }); notify('Exploración solicitada al servidor.'); }, 'small-button'));
     const form = el('form', { class: 'stack' }); const name = inputField(form, 'Nombre de la biblioteca', { required: true, maxLength: 80 });
     const type = inputField(form, 'Contenido', { tag: 'select' }); for (const [value, label] of [['movies', 'Películas'], ['tvshows', 'Series'], ['music', 'Música'], ['photos', 'Fotografías'], ['homevideos', 'Vídeos personales'], ['', 'Contenido mixto']]) type.append(el('option', { value }, label));
-    const path = inputField(form, 'Ruta absoluta que ve el servidor', { required: true, maxLength: 1024, placeholder: '/media/local/peliculas' });
+    const path = inputField(form, 'Ruta del servidor o enlace de Google Drive', { required: true, maxLength: 2048, placeholder: '/media/local/peliculas o https://drive.google.com/drive/folders/…' });
     const picker = el('section', { class: 'folder-picker', 'aria-label': 'Explorador de carpetas disponibles' });
     const source = el('select', { 'aria-label': 'Origen' }, el('option', { value: 'local' }, 'Disco local'), el('option', { value: 'cloud' }, 'Google Drive'));
     const folderSearch = el('input', { type: 'search', maxLength: 160, placeholder: 'Filtrar carpetas', 'aria-label': 'Filtrar carpetas' });
+    const folderBreadcrumbs = el('div', { class: 'folder-breadcrumbs', 'aria-label': 'Ruta de carpetas de Google Drive' });
     const folderList = el('div', { class: 'folder-picker-list' }); const folderStatus = el('p', { class: 'note', role: 'status' });
     const useFolder = el('button', { type: 'button', class: 'small-button' }, 'Usar esta carpeta');
-    let currentRelative = ''; let currentAbsolute = ''; let folderRequest = 0;
-    const loadFolders = async () => {
+    let currentRelative = ''; let currentAbsolute = ''; let folderRequest = 0; let driveStack = []; let driveNextPageToken = null;
+    const loadFolders = async ({ append = false } = {}) => {
       const request = ++folderRequest; useFolder.disabled = true; currentAbsolute = '';
-      folderStatus.textContent = 'Cargando carpetas…'; folderList.replaceChildren();
+      folderStatus.textContent = 'Cargando carpetas…'; if (!append) folderList.replaceChildren();
+      if (source.value === 'cloud') {
+        const query = new URLSearchParams(); const selected = driveStack.at(-1);
+        if (selected) query.set('parentId', selected.id);
+        if (append && driveNextPageToken) query.set('pageToken', driveNextPageToken);
+        let listing;
+        try { listing = await api(`/api/admin/google-drive/folders?${query}`); }
+        catch (error) { if (request === folderRequest) { folderStatus.textContent = error.message; folderList.replaceChildren(); } throw error; }
+        if (request !== folderRequest || generation !== state.generation) return;
+        currentAbsolute = selected ? `https://drive.google.com/drive/folders/${selected.id}` : '/media/cloud';
+        useFolder.disabled = false;
+        folderStatus.textContent = selected ? `Carpeta actual: ${driveStack.map(folder => folder.name).join(' / ')} · ${currentAbsolute}` : 'Carpeta actual: Mi unidad · /media/cloud';
+        folderBreadcrumbs.replaceChildren(button('Mi unidad', async () => { driveStack = []; driveNextPageToken = null; await loadFolders(); }, 'small-button'));
+        driveStack.forEach((folder, index) => folderBreadcrumbs.append(el('span', { 'aria-hidden': 'true' }, '›'), button(folder.name, async () => { driveStack = driveStack.slice(0, index + 1); driveNextPageToken = null; await loadFolders(); }, 'small-button')));
+        if (selected && !append) folderList.append(button('↑ Carpeta superior', async () => { driveStack.pop(); driveNextPageToken = null; await loadFolders(); }, 'small-button'));
+        if (append) folderList.querySelector('[data-drive-more]')?.remove();
+        const filter = folderSearch.value.trim().toLocaleLowerCase();
+        const folders = (listing.folders || []).filter(folder => !filter || folder.name.toLocaleLowerCase().includes(filter));
+        for (const folder of folders) folderList.append(button(`▰ ${folder.name}`, async () => { driveStack.push(folder); driveNextPageToken = null; await loadFolders(); }, 'small-button'));
+        driveNextPageToken = listing.nextPageToken || null;
+        if (driveNextPageToken) { const more = button('Cargar más carpetas', async () => loadFolders({ append: true }), 'small-button'); more.dataset.driveMore = 'true'; folderList.append(more); }
+        if (!folders.length && !driveNextPageToken) folderList.append(el('span', { class: 'note' }, 'No hay subcarpetas que coincidan.'));
+        return;
+      }
+      folderBreadcrumbs.replaceChildren();
       const query = new URLSearchParams({ source: source.value, path: currentRelative, search: folderSearch.value.trim() });
       let listing;
       try { listing = await api(`/api/admin/folders?${query}`); }
@@ -557,15 +582,18 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       for (const folder of listing.folders || []) folderList.append(button(`▰ ${folder}`, async () => { currentRelative = currentRelative ? `${currentRelative}/${folder}` : folder; await loadFolders(); }, 'small-button'));
       if (!listing.folders?.length) folderList.append(el('span', { class: 'note' }, 'No hay subcarpetas que coincidan.'));
     };
-    source.addEventListener('change', () => { currentRelative = ''; void busy(null, loadFolders); });
+    source.addEventListener('change', () => { currentRelative = ''; driveStack = []; driveNextPageToken = null; void busy(null, loadFolders); });
     folderSearch.addEventListener('change', () => void busy(null, loadFolders));
-    useFolder.addEventListener('click', () => { path.value = currentAbsolute; path.focus(); notify('Ruta seleccionada para la biblioteca.'); });
-    picker.append(el('h3', {}, 'Elegir una carpeta'), el('p', { class: 'note' }, 'El selector solo muestra carpetas legibles bajo las raíces montadas en el servidor.'), source, folderSearch, folderStatus, folderList, useFolder);
+    useFolder.addEventListener('click', () => { path.value = currentAbsolute; path.focus(); notify('Carpeta seleccionada. Revisa la ruta y guarda la biblioteca.'); });
+    picker.append(el('h3', {}, 'Elegir una carpeta'), el('p', { class: 'note' }, 'Google Drive se recorre con tu cuenta vinculada. Las carpetas locales se muestran desde el servidor.'), source, folderSearch, folderBreadcrumbs, folderStatus, folderList, useFolder);
     void busy(null, loadFolders);
     form.append(picker);
     const submit = el('button', { type: 'submit', class: 'primary' }, 'Conectar biblioteca'); form.append(submit);
     form.addEventListener('submit', event => { event.preventDefault(); void busy(submit, async () => {
-      const value = path.value.trim(); if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value)) throw new Error('Introduce una ruta absoluta accesible por Jellyfin.');
+      const value = path.value.trim();
+      let driveFolderLink = false;
+      try { const parsed = new URL(value); driveFolderLink = parsed.origin === 'https://drive.google.com' && /^\/drive\/folders\/[A-Za-z0-9_-]{10,200}\/?$/.test(parsed.pathname) && !parsed.username && !parsed.password && !parsed.hash; } catch {}
+      if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !driveFolderLink) throw new Error('Introduce una ruta absoluta del servidor o un enlace válido de carpeta de Google Drive.');
       if (editingLibrary) {
         const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [] } });
         notify(result.scanRequested ? 'Carpeta actualizada. Esta biblioteca usará únicamente la ruta elegida al terminar la exploración.' : 'Carpeta guardada. Pulsa Buscar contenido nuevo para solicitar la exploración.');
@@ -581,7 +609,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       type.value = library.LibraryOptions?.EnablePhotos ? 'photos' : (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
       path.value = library.Locations?.[0] || '';
       source.value = path.value.startsWith('/media/cloud') ? 'cloud' : 'local';
-      currentRelative = ''; folderSearch.value = ''; submit.textContent = 'Guardar carpeta de esta biblioteca';
+      currentRelative = ''; driveStack = []; driveNextPageToken = null; folderSearch.value = ''; submit.textContent = 'Guardar carpeta de esta biblioteca';
       form.scrollIntoView({ behavior: 'smooth', block: 'start' }); await loadFolders();
     };
     form.append(button('Preparar biblioteca nueva', () => { editingLibrary = null; name.disabled = false; type.disabled = false; name.value = ''; path.value = ''; submit.textContent = 'Conectar biblioteca'; }, 'small-button'));
@@ -598,7 +626,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     const prepareDrive = async (contentType, label) => {
       editingLibrary = null; name.disabled = false; type.disabled = false; submit.textContent = 'Conectar biblioteca';
       name.value = `${label} de Google Drive`; type.value = contentType;
-      source.value = 'cloud'; currentRelative = ''; folderSearch.value = ''; path.value = '';
+      source.value = 'cloud'; currentRelative = ''; driveStack = []; driveNextPageToken = null; folderSearch.value = ''; path.value = '';
       form.scrollIntoView({ behavior: 'smooth', block: 'start' });
       await loadFolders();
       path.focus(); notify(`Elige la carpeta de Drive para ${label.toLowerCase()} y pulsa “Usar esta carpeta”.`);
@@ -618,7 +646,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       connectDrive,
       el('p', { class: 'note' }, 'Aviso de privacidad: para mostrar y reproducir el contenido, JRPlex lee los nombres, metadatos y archivos visibles en el Drive vinculado. La autorización se limita a lectura; el servidor conserva los tokens cifrados. ', el('a', { href: '/privacy' }, 'Consulta cómo se usan, protegen y eliminan estos datos.')),
       el('p', { class: 'note' }, 'Se solicita solo lectura. Usa una cuenta de Google dedicada que tenga acceso únicamente a tus medios; el permiso cubre los archivos visibles para esa cuenta.'),
-      el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, fotografías y música. También puedes escribir la ruta completa bajo /media/cloud en el formulario y conectar la biblioteca después de revisarla.'),
+      el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, fotografías y música. Puedes recorrer Drive, pegar el enlace de una carpeta o elegir una ruta del servidor.'),
       el('p', { class: 'note' }, 'Usa los botones de mapeo al inicio de esta sección.'));
     body.append(panel('Mapear carpetas de Google Drive', el('p', {}, 'Selecciona qué carpeta debe alimentar cada biblioteca. Si una biblioteca ya abarca todo Drive, usa Cambiar carpeta para limitarla primero; después conecta tus carpetas de música y fotos.'), prepareCloud, preparePhotos, prepareMusic), el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
     if (state.mappingType) { const mappingType = state.mappingType; state.mappingType = null; await prepareDrive(mappingType, { movies: 'Películas', music: 'Música', photos: 'Fotos' }[mappingType] || 'Películas'); }

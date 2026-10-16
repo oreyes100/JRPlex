@@ -105,6 +105,33 @@ test('admin folder browser is read-only, filters entries, and rejects parent tra
   assert.equal(f.state.requests.filter(request => request.path === '/Environment/DirectoryContents').length, 3);
 });
 
+test('admins can browse Drive folders and save a shared Google folder link as a mounted library path', async (t) => {
+  const folderId = 'southparkfolder123456'; const driveLink = `https://drive.google.com/drive/folders/${folderId}?hl=es-419`;
+  const googleOAuth = {
+    listFolders: async (parentId, pageToken) => ({ parentId: parentId || null, folders: [{ id: folderId, name: 'South Park' }], nextPageToken: pageToken ? null : 'next' }),
+    resolveFolderUrl: async value => { assert.equal(value, driveLink); return '/media/cloud/Series/South Park'; },
+    status: async () => ({ configured: true, linked: true }),
+  };
+  const f = await fixture(t, {}, { googleOAuth });
+  f.state.libraries.push({ ItemId: 'library-id', Name: 'Películas', Locations: ['/media/cloud'], LibraryOptions: { PathInfos: [{ Path: '/media/cloud' }] } });
+  const session = await f.login();
+  const listing = await f.request(`/api/admin/google-drive/folders?parentId=${encodeURIComponent('seriesfolder12345678')}`, { headers: { Cookie: session.cookie } });
+  assert.equal(listing.status, 200);
+  assert.deepEqual(await listing.json(), { parentId: 'seriesfolder12345678', folders: [{ id: folderId, name: 'South Park' }], nextPageToken: 'next' });
+  const mapped = await f.request('/api/admin/libraries/library-id/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ path: driveLink, previousPaths: ['/media/cloud'] }) });
+  assert.equal(mapped.status, 200);
+  assert.equal((await mapped.json()).path, '/media/cloud/Series/South Park');
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Series/South Park']);
+  const created = await f.request('/jellyfin/Library/VirtualFolders?name=South%20Park&collectionType=movies&refreshLibrary=false', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ LibraryOptions: { PathInfos: [{ Path: driveLink }] } }) });
+  assert.equal(created.status, 200);
+  const createRequest = f.state.requests.find(request => request.path === '/Library/VirtualFolders' && request.method === 'POST');
+  assert.equal(JSON.parse(createRequest.body).LibraryOptions.PathInfos[0].Path, '/media/cloud/Series/South Park');
+  const viewer = { ...session, cookie: session.cookie };
+  f.state.admin = false;
+  const denied = await f.request('/api/admin/google-drive/folders', { headers: { Cookie: viewer.cookie } });
+  assert.equal(denied.status, 403);
+});
+
 test('public homepage and privacy policy need no login; player remains separately available', async (t) => {
   const f = await fixture(t);
   const page = await f.request('/');
