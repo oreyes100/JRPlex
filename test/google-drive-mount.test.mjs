@@ -15,7 +15,7 @@ test('rclone gets read-only Google OAuth values only in its child environment', 
   assert.equal(env.RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID, 'folder_abcdefghijk');
   assert.equal(Object.keys(env).some(key => /^RCLONE_CONFIG_PASS$/i.test(key)), false);
   assert.deepEqual(rcloneMountArgs('/srv/jrplex/cloud', '/var/cache/jrplex'), [
-    '--config', '/dev/null', 'mount', 'gdrive:', '/srv/jrplex/cloud', '--read-only', '--vfs-cache-mode', 'full', '--cache-dir', '/var/cache/jrplex',
+    '--config', '/dev/null', 'mount', 'gdrive:', '/srv/jrplex/cloud', '--read-only', '--allow-other', '--default-permissions', '--dir-perms', '0700', '--file-perms', '0600', '--vfs-cache-mode', 'full', '--cache-dir', '/var/cache/jrplex',
     '--vfs-cache-max-size', '2G', '--vfs-cache-max-age', '30m', '--vfs-cache-min-free-space', '5G', '--buffer-size', '16M', '--log-level', 'ERROR',
   ]);
 });

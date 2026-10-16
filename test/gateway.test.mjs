@@ -8,7 +8,7 @@ import { torrentInput } from '../lib/torrents.mjs';
 
 async function start(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t, overrides = {}, options = {}) {
-  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false };
+  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false };
   const user = () => ({ Id: 'alice', Name: 'Alice', Policy: { IsAdministrator: state.admin, IsDisabled: state.disabled } });
   const media = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -50,6 +50,18 @@ async function fixture(t, overrides = {}, options = {}) {
       return res.end(req.method === 'HEAD' ? undefined : range ? '2345' : '01234567');
     }
     if (url.pathname === '/Users') return json([user()]);
+    if (url.pathname === '/Library/VirtualFolders' && req.method === 'GET') return json(state.libraries);
+    if (url.pathname === '/Library/VirtualFolders/Paths') {
+      const input = raw ? JSON.parse(raw) : {};
+      const library = state.libraries.find(l => l.Name === (input.Name || url.searchParams.get('name')));
+      if (!library) return json({}, 404);
+      if (req.method === 'POST') library.Locations = [...new Set([...library.Locations, input.PathInfo.Path])];
+      else {
+        if (state.failRemovePath) { state.failRemovePath = false; return json({}, 500); }
+        library.Locations = library.Locations.filter(p => p !== url.searchParams.get('path'));
+      }
+      res.writeHead(204); return res.end();
+    }
     if (url.pathname === '/Library/Refresh') { res.writeHead(204); return res.end(); }
     return json({ ok: true });
   });
@@ -431,4 +443,52 @@ test('torrent status is admin-only and preserves actionable errors without expos
   f.state.admin = false;
   assert.equal((await f.request(`/api/admin/torrents/${id}/status`, { headers: { Cookie: session.cookie } })).status, 403);
   assert.deepEqual(calls, [id]);
+});
+
+
+test('existing library mapping replaces the root with the chosen folder while keeping its identity', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ ItemId: 'drive', Name: 'Drive movies', Locations: ['/media/cloud'], LibraryOptions: { PathInfos: [{ Path: '/media/cloud' }] } }];
+  const save = input => f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify(input) });
+  const response = await save({ path: '/media/cloud/Movies', previousPaths: ['/media/cloud'] });
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Movies']);
+  assert.equal(f.state.libraries[0].ItemId, 'drive');
+  assert.ok(f.state.requests.some(r => r.path === '/Library/Refresh'), 'validate library structure so new physical folder references are indexed');
+  assert.equal((await save({ path: '/media/cloud/Other', previousPaths: ['/media/cloud'] })).status, 409, 'stale clients cannot overwrite a new mapping');
+  assert.equal((await save({ path: '/etc', previousPaths: ['/media/cloud/Movies'] })).status, 400);
+  assert.equal((await save({ path: '/media/cloud/../local', previousPaths: ['/media/cloud/Movies'] })).status, 400);
+  assert.equal(f.state.requests.some(r => r.path === '/Items/drive' && r.method === 'DELETE'), false, 'no library or media deletion');
+});
+
+test('mapping failure restores the previous path and denies viewer or missing-CSRF changes', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ ItemId: 'drive', Name: 'Drive', Locations: ['/media/cloud'] }];
+  f.state.failRemovePath = true;
+  const input = { path: '/media/cloud/Movies', previousPaths: ['/media/cloud'] };
+  const response = await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify(input) });
+  assert.equal(response.status, 502);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud']);
+  assert.equal((await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: { Cookie: session.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).status, 403);
+  f.state.admin = false;
+  assert.equal((await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify(input) })).status, 403);
+});
+
+
+test('photograph mapping uses the collection type accepted by Jellyfin 12 and enables photo indexing', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  const response = await f.request('/jellyfin/Library/VirtualFolders?name=Photos&collectionType=photos&refreshLibrary=true', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ LibraryOptions: { PathInfos: [{ Path: '/media/cloud/Photos' }] } }) });
+  assert.equal(response.status, 200);
+  const upstream = f.state.requests.find(r => r.path === '/Library/VirtualFolders' && r.method === 'POST');
+  assert.equal(upstream.query.get('collectionType'), 'homevideos');
+  assert.equal(JSON.parse(upstream.body).LibraryOptions.EnablePhotos, true);
+});
+
+
+test('resume uses Jellyfin 12 UserItems route and forces the authenticated user', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  const response = await f.request('/jellyfin/UserItems/Resume?userId=someone-else', { headers: { Cookie: session.cookie } });
+  assert.equal(response.status, 200);
+  const upstream = f.state.requests.find(r => r.path === '/UserItems/Resume');
+  assert.equal(upstream.query.get('userId'), 'alice');
 });

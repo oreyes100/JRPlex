@@ -21,8 +21,10 @@ export function rcloneEnvironment(credentials, source = process.env, folderId = 
   return env;
 }
 
+// rclone's FUSE backend ignores --allow-root. Kernel permission checks with
+// 0700/0600 preserve access for the mount owner and root while Docker validates it.
 export function rcloneMountArgs(mount, cache) {
-  return ['--config', '/dev/null', 'mount', 'gdrive:', mount, '--read-only', '--vfs-cache-mode', 'full', '--cache-dir', cache,
+  return ['--config', '/dev/null', 'mount', 'gdrive:', mount, '--read-only', '--allow-other', '--default-permissions', '--dir-perms', '0700', '--file-perms', '0600', '--vfs-cache-mode', 'full', '--cache-dir', cache,
     '--vfs-cache-max-size', '2G', '--vfs-cache-max-age', '30m', '--vfs-cache-min-free-space', '5G', '--buffer-size', '16M', '--log-level', 'ERROR'];
 }
 

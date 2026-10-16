@@ -4,7 +4,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null };
+  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null };
   const cloudReturn = new URLSearchParams(window.location.search).get('cloud');
   if (['google-linked', 'google-error', 'google-cancelled'].includes(cloudReturn)) window.history.replaceState(null, '', window.location.pathname);
   let toastTimer; let playIntent = 0;
@@ -150,24 +150,26 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       if (generation === state.generation && state.session) $('content').replaceChildren(empty('No se pudo cargar esta vista', error.message), button('Volver a intentar', () => navigate(view)));
     }
   }
+  async function openDriveMapping(type) { state.mappingType = type; state.adminTab = 'libraries'; await navigate('admin'); }
   async function renderFolders(generation) {
     const userId = state.session?.user?.Id;
     if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
-    const response = await api(`/Users/${userId}/Views`);
+    const response = await api(`/jellyfin/Users/${userId}/Views`);
     if (generation !== state.generation) return;
     const libraries = (response?.Items || []).filter(view => validId(view?.Id));
     const content = $('content');
     const renderLibraryList = () => {
       content.replaceChildren(title('Carpetas', 'Busca y explora las bibliotecas locales y de Google Drive autorizadas para tu cuenta.'));
+      if (isAdministrator()) content.append(button('Seleccionar carpeta de Google Drive', () => openDriveMapping('movies'), 'primary'));
       if (!libraries.length) { content.append(empty('No hay bibliotecas disponibles', 'El administrador debe conectar una carpeta local o de Google Drive.')); return; }
       const list = el('div', { class: 'folder-library-list', role: 'group', 'aria-label': 'Bibliotecas disponibles' });
       for (const library of libraries) list.append(button(`▰ ${library.Name || 'Biblioteca'}`, () => void busy(null, () => browse(library)), 'folder-card'));
       content.append(list);
     };
     const browse = async (library, parentId = library.Id, stack = [], search = '', startIndex = 0, target = content) => {
-      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '100', StartIndex: String(startIndex), SortBy: 'SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio', Fields: 'Overview,Genres,MediaSources,MediaStreams', EnableUserData: 'true' });
+      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '100', StartIndex: String(startIndex), SortBy: 'SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio,Photo,PhotoAlbum', Fields: 'Overview,Genres,MediaSources,MediaStreams', EnableUserData: 'true' });
       if (search) query.set('SearchTerm', search);
-      const page = await api(`/Users/${userId}/Items?${query}`);
+      const page = await api(`/jellyfin/Users/${userId}/Items?${query}`);
       if (generation !== state.generation) return;
       if (startIndex === 0) {
         target.replaceChildren(title('Carpetas', `${library.Name || 'Biblioteca'} · busca en esta carpeta y sus subcarpetas.`));
@@ -186,9 +188,11 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       const grid = target.querySelector('.card-grid') || el('div', { class: 'card-grid' });
       if (!grid.isConnected) target.append(grid);
       const folders = items.filter(item => validId(item?.Id) && isContainer(item));
-      const media = items.filter(item => validId(item?.Id) && isDisplayableItem(item));
+      const media = items.filter(item => validId(item?.Id) && !isContainer(item) && isDisplayableItem(item));
       for (const folder of folders) grid.append(el('button', { type: 'button', class: 'folder-card', onclick: () => void busy(null, () => browse(library, folder.Id, [...stack, { id: folder.Id, name: folder.Name || 'Carpeta' }])) }, el('span', { 'aria-hidden': 'true' }, '▰'), el('span', {}, folder.Name || 'Carpeta')));
       grid.append(...media.map(card));
+      const photos = items.filter(item => validId(item?.Id) && isPhotoItem(item));
+      for (const photo of photos) grid.append(button(`▧ ${photo.Name || 'Fotografía'}`, () => renderPhotoFolder(library, parentId, stack, generation), 'folder-card'));
       const count = target.querySelector('.folder-result-count') || el('p', { class: 'folder-result-count', role: 'status' });
       count.textContent = `${grid.querySelectorAll('.folder-card').length} carpetas · ${grid.querySelectorAll('.media-card').length} archivos reproducibles`;
       if (!count.isConnected) target.insertBefore(count, grid);
@@ -209,10 +213,12 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     const query = new URLSearchParams({ Recursive: 'true', Limit: '100', StartIndex: '0', SortBy: 'SortName', SortOrder: 'Ascending', Fields: 'Overview,Genres,MediaSources,MediaStreams,Path', EnableUserData: 'true' });
     if (state.view === 'favorites') query.set('IsFavorite', 'true');
     else query.set('IncludeItemTypes', { home: 'Movie,Series,MusicAlbum,Audio,Video,Episode', movies: 'Movie,Video,Episode', series: 'Series', music: 'MusicAlbum,Audio' }[state.view] || 'Movie,Series,Audio');
-    if (state.view === 'music') query.set('MediaTypes', 'Audio');
-    else if (state.view === 'movies') query.set('MediaTypes', 'Video');
+    // Album containers have no MediaType. Filter by item type so both albums
+    // and audio tracks remain discoverable.
+
+    if (state.view === 'movies') query.set('MediaTypes', 'Video');
     if (state.search) query.set('SearchTerm', state.search);
-    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`), state.view === 'home' && !state.search ? api('/jellyfin/Items/Resume?Limit=12&MediaTypes=Video&Fields=Overview,MediaSources,MediaStreams').catch(() => null) : Promise.resolve(null)]);
+    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`), state.view === 'home' && !state.search ? api('/jellyfin/UserItems/Resume?Limit=12&MediaTypes=Video&Fields=Overview,MediaSources,MediaStreams').catch(() => null) : Promise.resolve(null)]);
     if (generation !== state.generation || !state.session) return;
     if (!Array.isArray(catalogue?.Items)) throw new Error('El catálogo recibido no es válido.');
     const content = $('content'); content.replaceChildren();
@@ -233,6 +239,10 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     };
     appendItems(catalogue.Items);
     if (!visibleItems.length) { emptyNotice = empty(state.search ? 'No hay coincidencias reproducibles' : state.view === 'favorites' ? 'Guarda tus próximas historias' : 'Todavía no hay vídeos compatibles', state.search ? 'Prueba otro nombre o elige un archivo de vídeo o audio compatible.' : state.view === 'favorites' ? 'Abre un título y márcalo como favorito para encontrarlo aquí.' : 'Los vídeos se detectan por su formato y el servidor prepara la reproducción aunque todavía no haya analizado sus pistas.'); content.append(emptyNotice); }
+    if (state.view === 'music') {
+      if (!visibleItems.length && !state.search) emptyNotice?.replaceChildren(el('h3', {}, 'Aún no hay música indexada'), el('p', {}, 'Conecta tu carpeta de música y espera a que termine la exploración de la biblioteca.'));
+      if (isAdministrator()) content.insertBefore(button('Seleccionar carpeta de música de Google Drive', () => openDriveMapping('music'), 'primary'), listHeading);
+    }
     let index = catalogue.Items.length; const total = Number(catalogue.TotalRecordCount) || index;
     if (index < total) {
       const more = el('button', { type: 'button', class: 'secondary load-more' }, 'Cargar más');
@@ -247,14 +257,16 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
   async function renderPhotos(generation) {
     const userId = state.session?.user?.Id;
     if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
-    const result = await api(`/Users/${userId}/Views`);
+    const result = await api(`/jellyfin/Users/${userId}/Views`);
     if (generation !== state.generation) return;
-    const libraries = (result?.Items || []).filter(view => String(view.CollectionType || '').toLowerCase() === 'photos');
+    const available = (result?.Items || []).filter(view => validId(view?.Id));
+    const preferred = available.filter(view => ['photos', 'homevideos'].includes(String(view.CollectionType || '').toLowerCase()));
+    const libraries = [...preferred, ...available.filter(view => !preferred.includes(view))];
     const content = $('content');
     if (!libraries.length) {
       content.replaceChildren(title('Fotografías', 'Tus álbumes y carpetas de imágenes.'));
-      content.append(empty('Aún no hay una biblioteca de fotos', 'Pide al administrador que añada la carpeta de imágenes de Drive como biblioteca de tipo Fotografías.'));
-      if (state.session.user.Policy?.IsAdministrator) content.append(button('Preparar fotos de Google Drive', async () => { state.adminTab = 'libraries'; await navigate('admin'); }, 'primary'));
+      content.append(empty('Aún no hay una biblioteca de fotos', 'Conecta una carpeta de imágenes de Drive para verla aquí.'));
+      if (state.session.user.Policy?.IsAdministrator) content.append(button('Preparar fotos de Google Drive', () => openDriveMapping('photos'), 'primary'));
       return;
     }
     await renderPhotoFolder(libraries[0], null, [], generation, libraries);
@@ -272,6 +284,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     stopPhotoSlideshow();
     const content = $('content');
     content.replaceChildren(title('Fotografías', 'Explora las carpetas y reproduce una secuencia de imágenes.'));
+    if (isAdministrator()) content.append(button('Seleccionar carpeta de fotos de Google Drive', () => openDriveMapping('photos'), 'primary'));
     if (libraries.length > 1) {
       const selector = el('div', { class: 'photo-library-list', role: 'group', 'aria-label': 'Bibliotecas de fotos' });
       for (const candidate of libraries) selector.append(button(candidate.Name || 'Fotos', () => renderPhotoFolder(candidate, null, [], generation, libraries), candidate.Id === library.Id ? 'active' : 'small-button'));
@@ -298,7 +311,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     context.loading = true; context.more.disabled = true; context.more.hidden = false; context.more.textContent = 'Cargando…';
     try {
       const query = new URLSearchParams({ ParentId: context.parentId, Recursive: 'false', Limit: '150', StartIndex: String(context.cursor), SortBy: 'SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Photo,PhotoAlbum,Folder', Fields: 'Path', EnableUserData: 'false' });
-      const result = await api(`/Users/${state.session.user.Id}/Items?${query}`);
+      const result = await api(`/jellyfin/Users/${state.session.user.Id}/Items?${query}`);
       if (state.photos !== context || context.generation !== state.generation) return;
       const rows = Array.isArray(result?.Items) ? result.Items : [];
       context.cursor += rows.length; context.total = Number(result?.TotalRecordCount) || context.cursor;
@@ -513,9 +526,10 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     body.append(el('div', { class: 'admin-grid' }, listing, panel('Crear usuario', el('p', {}, 'Las cuentas nuevas son de reproducción y no tienen acceso administrativo. Comparte la contraseña por un medio privado después de confirmar sus permisos.'), form)));
   }
   async function adminLibraries(body, generation) {
-    const libraries = await api('/jellyfin/Library/VirtualFolders'); if (generation !== state.generation) return;
+    const [libraries, views] = await Promise.all([api('/jellyfin/Library/VirtualFolders'), api(`/jellyfin/Users/${state.session.user.Id}/Views`)]); if (generation !== state.generation) return;
+    let editingLibrary = null;
     const listing = panel('Bibliotecas del servidor');
-    for (const library of libraries || []) listing.append(el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), el('span', { class: 'pill' }, 'Configurada')));
+    for (const library of libraries || []) listing.append(el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), button('Cambiar carpeta', () => editLibrary(library), 'small-button')));
     if (!libraries?.length) listing.append(el('p', {}, 'Todavía no hay bibliotecas configuradas.'));
     listing.append(button('Buscar contenido nuevo', async () => { await api('/jellyfin/Library/Refresh', { method: 'POST' }); notify('Exploración solicitada al servidor.'); }, 'small-button'));
     const form = el('form', { class: 'stack' }); const name = inputField(form, 'Nombre de la biblioteca', { required: true, maxLength: 80 });
@@ -552,13 +566,28 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     const submit = el('button', { type: 'submit', class: 'primary' }, 'Conectar biblioteca'); form.append(submit);
     form.addEventListener('submit', event => { event.preventDefault(); void busy(submit, async () => {
       const value = path.value.trim(); if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value)) throw new Error('Introduce una ruta absoluta accesible por Jellyfin.');
-      const query = new URLSearchParams({ name: name.value.trim(), refreshLibrary: 'true' }); if (type.value) query.set('collectionType', type.value);
+      if (editingLibrary) {
+        const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [] } });
+        notify(result.scanRequested ? 'Carpeta actualizada. Esta biblioteca usará únicamente la ruta elegida al terminar la exploración.' : 'Carpeta guardada. Pulsa Buscar contenido nuevo para solicitar la exploración.');
+        await navigate('admin'); return;
+      }
+      const query = new URLSearchParams({ name: name.value.trim(), refreshLibrary: 'false' }); if (type.value) query.set('collectionType', type.value === 'photos' ? 'homevideos' : type.value);
       await api(`/jellyfin/Library/VirtualFolders?${query}`, { method: 'POST', body: { LibraryOptions: { PathInfos: [{ Path: value }], ...(type.value === 'photos' ? { EnablePhotos: true } : {}), EnableRealtimeMonitor: false, SaveLocalMetadata: false } } });
+      await api('/jellyfin/Library/Refresh', { method: 'POST', body: {} });
       notify('Biblioteca añadida. El contenido aparecerá tras la exploración.'); await navigate('admin');
     }); });
+    const editLibrary = async library => {
+      editingLibrary = library; name.value = library.Name; name.disabled = true; type.disabled = true;
+      type.value = library.LibraryOptions?.EnablePhotos ? 'photos' : (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+      path.value = library.Locations?.[0] || '';
+      source.value = path.value.startsWith('/media/cloud') ? 'cloud' : 'local';
+      currentRelative = ''; folderSearch.value = ''; submit.textContent = 'Guardar carpeta de esta biblioteca';
+      form.scrollIntoView({ behavior: 'smooth', block: 'start' }); await loadFolders();
+    };
+    form.append(button('Preparar biblioteca nueva', () => { editingLibrary = null; name.disabled = false; type.disabled = false; name.value = ''; path.value = ''; submit.textContent = 'Conectar biblioteca'; }, 'small-button'));
     const cloudRoot = '/media/cloud';
     const cloudRegistered = (libraries || []).some(library => (library.Locations || []).some(location => location === cloudRoot || location.startsWith(`${cloudRoot}/`)));
-    const driveStatus = await api('/api/admin/google-drive/status');
+    const driveStatus = await api('/api/admin/google-drive/status').catch(() => ({ configured: false, linked: false, mountVerified: false }));
     const connectDrive = button(driveStatus.linked ? 'Volver a vincular Google Drive' : 'Vincular Google Drive', async () => {
       const result = await api('/api/admin/google-drive/connect', { method: 'POST', body: {} });
       const destination = new URL(result?.url || '');
@@ -567,6 +596,7 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     }, 'primary');
     connectDrive.disabled = !driveStatus.configured;
     const prepareDrive = async (contentType, label) => {
+      editingLibrary = null; name.disabled = false; type.disabled = false; submit.textContent = 'Conectar biblioteca';
       name.value = `${label} de Google Drive`; type.value = contentType;
       source.value = 'cloud'; currentRelative = ''; folderSearch.value = ''; path.value = '';
       form.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -588,10 +618,10 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       connectDrive,
       el('p', { class: 'note' }, 'Aviso de privacidad: para mostrar y reproducir el contenido, JRPlex lee los nombres, metadatos y archivos visibles en el Drive vinculado. La autorización se limita a lectura; el servidor conserva los tokens cifrados. ', el('a', { href: '/privacy' }, 'Consulta cómo se usan, protegen y eliminan estos datos.')),
       el('p', { class: 'note' }, 'Se solicita solo lectura. Usa una cuenta de Google dedicada que tenga acceso únicamente a tus medios; el permiso cubre los archivos visibles para esa cuenta.'),
-      prepareCloud,
       el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, fotografías y música. También puedes escribir la ruta completa bajo /media/cloud en el formulario y conectar la biblioteca después de revisarla.'),
-      preparePhotos, prepareMusic);
-    body.append(el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
+      el('p', { class: 'note' }, 'Usa los botones de mapeo al inicio de esta sección.'));
+    body.append(panel('Mapear carpetas de Google Drive', el('p', {}, 'Selecciona qué carpeta debe alimentar cada biblioteca. Si una biblioteca ya abarca todo Drive, usa Cambiar carpeta para limitarla primero; después conecta tus carpetas de música y fotos.'), prepareCloud, preparePhotos, prepareMusic), el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
+    if (state.mappingType) { const mappingType = state.mappingType; state.mappingType = null; await prepareDrive(mappingType, { movies: 'Películas', music: 'Música', photos: 'Fotos' }[mappingType] || 'Películas'); }
   }
   async function adminTorrents(body, generation) {
     const form = el('form', { class: 'stack' }); const magnet = inputField(form, 'Enlace magnet', { placeholder: 'magnet:?xt=urn:btih:…', maxLength: 8192 });

@@ -19,8 +19,10 @@ LockPersonality=true
 RestrictSUIDSGID=true
 StandardOutput=journal
 StandardError=journal
+ExecStartPre=-/usr/bin/fusermount3 -uz /home/devops/JRPlex/runtime/media/cloud
 ExecStartPre=/bin/rm -f /home/devops/.local/share/jrplex/google-drive-mount/mount-status
 ExecStartPost=/bin/sh -c 'for attempt in $(seq 1 60); do if /usr/bin/mountpoint -q /home/devops/JRPlex/runtime/media/cloud; then printf active > /home/devops/.local/share/jrplex/google-drive-mount/mount-status; chmod 644 /home/devops/.local/share/jrplex/google-drive-mount/mount-status; exit 0; fi; sleep 1; done; exit 1'
+ExecStopPost=-/usr/bin/fusermount3 -uz /home/devops/JRPlex/runtime/media/cloud
 ExecStopPost=/bin/rm -f /home/devops/.local/share/jrplex/google-drive-mount/mount-status
 
 [Install]

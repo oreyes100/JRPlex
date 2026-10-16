@@ -59,15 +59,18 @@ test('torrent video is served only after its selected pieces verify and deleted 
     torrentFilesDir: root, torrentSavePath: root, upstreamTimeout: 5000, maxJson: 1024 * 1024,
   }, { fetch });
   assert.equal(await client.health(), true);
-  const responses = await Promise.all(Array.from({ length: 20 }, () => client.add({ url: `magnet:?xt=urn:btih:${hash}` })));
+  const responses = await Promise.all(Array.from({ length: 20 }, () => client.add({ url: `magnet:?xt=urn:btih:${hash}&tr=udp%3A%2F%2F93.184.216.34%3A1337%2Fannounce&tr=udp%3A%2F%2F127.0.0.1%3A80%2Fannounce` })));
   const session = responses[0];
   assert.ok(responses.every(result => result.id === session.id), 'parallel duplicate submissions reuse one playback session');
   assert.equal(session.files.length, 1);
   assert.deepEqual(session.files.map(file => file.name), ['movie.mp4'], 'TypeScript declarations are hidden from torrent choices');
   await assert.rejects(client.play(session.id, 1), /vídeo válido/i);
   assert.equal(addCalls, 1, 'a repeated magnet is added to qBittorrent only once');
+  assert.deepEqual(new URL(addFields.get('urls')).searchParams.getAll('tr'), ['udp://93.184.216.34:1337/announce'], 'qBittorrent receives a public tracker while private endpoints are discarded');
   assert.equal(addFields.get('paused'), 'false', 'metadata discovery can run');
-  assert.equal(addFields.get('dlLimit'), '1', 'metadata discovery has a one-byte-per-second payload cap');
+  assert.equal(addFields.get('dlLimit'), '0', 'metadata exchanges are not throttled to one byte per second');
+  assert.equal(addFields.get('stopped'), 'false');
+  assert.equal(addFields.get('stopCondition'), 'MetadataReceived', 'daemon stops before payload download');
   assert.equal(addFields.get('sequentialDownload'), 'true');
   assert.equal(addFields.get('firstLastPiecePrio'), 'true');
   assert.ok(filePolls >= 2, 'the qBittorrent 404 while metadata is pending is retried');

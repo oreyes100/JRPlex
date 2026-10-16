@@ -1,0 +1,2 @@
+/* Keep all media sections visible on narrow screens, including photographs. */
+@media(max-width:720px){.sidebar nav{flex-wrap:wrap}.sidebar{overflow:visible}.nav-item{flex:0 0 auto}.sidebar-bottom{position:static;margin-top:12px}.sidebar-bottom .nav-item{font-size:11px}.sidebar-bottom .nav-item>span{font-size:17px}}

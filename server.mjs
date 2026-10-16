@@ -5,6 +5,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HttpError, loadConfig, opaque, equal, safePath, cleanQuery, sanitizeJson, rewritePlaylist, boundedBody, requireStrongPassword, normalizeIp } from './lib/security.mjs';
+import { replaceLibraryPath } from './lib/library-mapping.mjs';
 import { createTorrentClient } from './lib/torrents.mjs';
 import { createGoogleDriveOAuth } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
@@ -18,6 +19,7 @@ const publicUser = (user) => ({ Id: user.Id, Name: user.Name, Policy: { IsAdmini
 export function createApp(config = loadConfig(), options = {}) {
   const sessions = new Map();
   const attempts = new Map();
+  const mappingOperations = new Set();
   const torrent = options.torrentClient || createTorrentClient(config);
   const googleOAuth = options.googleOAuth || createGoogleDriveOAuth(config, { projectRoot });
   const cloudMountStatus = options.cloudMountStatus || (async () => {
@@ -104,6 +106,7 @@ export function createApp(config = loadConfig(), options = {}) {
     if (path === '/Library/VirtualFolders' && ['GET', 'POST', 'DELETE'].includes(method)) return 'admin';
     if (path === '/Library/Refresh' && method === 'POST') return 'admin';
     if (path === '/Users/Me' && method === 'GET') return 'user';
+    if (path === '/UserItems/Resume' && ['GET', 'HEAD'].includes(method)) return 'user';
     const ownUser = path.match(new RegExp(`^/Users/(${id})(?:/(.*))?$`));
     if (ownUser) {
       if (ownUser[1] !== session.user.Id) throw new HttpError(403, 'User access denied');
@@ -135,6 +138,10 @@ export function createApp(config = loadConfig(), options = {}) {
     if (mutation(req.method)) {
       csrf(req, session);
       const parsed = await body(req);
+      if (path === '/Library/VirtualFolders' && req.method === 'POST' && url.searchParams.get('collectionType') === 'photos') {
+        url.searchParams.set('collectionType', 'homevideos');
+        parsed.LibraryOptions = { ...parsed.LibraryOptions, EnablePhotos: true };
+      }
       if (path === '/Users/New') {
         requireStrongPassword(parsed.Password);
         if (typeof parsed.Name !== 'string' || !parsed.Name.trim() || parsed.Name.length > 64) throw new HttpError(400, 'A user name of at most 64 characters is required');
@@ -266,6 +273,15 @@ export function createApp(config = loadConfig(), options = {}) {
         }
         if (route.startsWith('/api/admin/')) {
           await requireAdmin(session);
+          const mappingMatch = route.match(/^\/api\/admin\/libraries\/([A-Za-z0-9_-]{1,128})\/path$/);
+          if (mappingMatch && req.method === 'POST') {
+            const input = await body(req); const id = mappingMatch[1];
+            if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca ya está guardando una ruta.');
+            mappingOperations.add(id);
+            try { send(res, 200, await replaceLibraryPath({ id, input, session, upstream, jsonResponse })); }
+            finally { mappingOperations.delete(id); }
+            return;
+          }
           if (route === '/api/admin/folders' && req.method === 'GET') {
             const query = new URL(req.url, config.publicUrl);
             const source = query.searchParams.get('source') || '';
