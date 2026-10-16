@@ -67,6 +67,7 @@ Prueba también desde una red exterior con navegador: acceso, reproducción, bú
 - [Almacenamiento nube y credenciales](deploy/STORAGE.md): configuración cifrada fuera del repositorio, gestor de contraseña separado y montaje read-only con caché acotada.
 - [Vincular Google Drive con OAuth](deploy/GOOGLE-DRIVE.md): cliente OAuth propio, consentimiento de solo lectura, configuración cifrada, montaje de servidor y pruebas antes de compartir la biblioteca.
 - [Reproducir desde torrent](deploy/TORRENTS.md): selección del vídeo, entrega progresiva de piezas verificadas y limpieza de caché temporal.
+- [Enviar a TV, Fire TV y Chromecast](deploy/CASTING.md): botón durante la reproducción, Google Cast y receptor web `/tv` vinculado por código; pausa, búsqueda y regreso al dispositivo.
 - [Windows y macOS nativos](deploy/NATIVE.md): mismo gateway, motor nativo y arranque del sistema.
 - [Respaldo, restauración y mantenimiento](deploy/OPERATIONS.md): parada consistente, copia privada, verificación en entorno aislado y retirada reversible.
 

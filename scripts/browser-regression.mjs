@@ -112,6 +112,17 @@ try {
   await page.getByRole('button',{name:'▷ Reproducir',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.torrent-video')?.currentTime>0.25,{},{timeout:15000});
   console.log('PASS magnet: actual Chrome video playback advances after deferred file creation; peers are simulated');
+  const activeTorrent=(await torrentClient.list())[0];
+  const castMedia=await page.evaluate(async id=>{
+    const session=await (await fetch('/api/session')).json();
+    const response=await fetch('/api/cast/media',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':session.csrfToken},body:JSON.stringify({kind:'torrent',sessionId:id,fileIndex:0})});
+    if(!response.ok)throw new Error('Torrent Cast grant failed');return response.json();
+  },activeTorrent.id);
+  const remoteBytes=await fetch(castMedia.url,{headers:{Range:'bytes=0-127'}});
+  assert.equal(remoteBytes.status,206);assert.deepEqual(Buffer.from(await remoteBytes.arrayBuffer()),videoBytes.subarray(0,128));
+  await page.evaluate(async id=>{const session=await(await fetch('/api/session')).json();await fetch(`/api/cast/media/${id}`,{method:'DELETE',headers:{'content-type':'application/json','x-csrf-token':session.csrfToken},body:'{}'});},castMedia.id);
+  assert.equal((await fetch(castMedia.url)).status,401);assert.equal((await torrentClient.list())[0].id,activeTorrent.id);
+  console.log('PASS torrent Cast: real verified MP4 bytes reach a cookie-free receiver; revoking Cast preserves the original torrent session');
   // Keep the video paused to test a service failure and retry within the same session.
   await page.locator('.torrent-video').evaluate(video=>video.pause());qbState='error';
   await page.getByRole('alert').filter({hasText:'qBittorrent no puede leer o guardar'}).first().waitFor({timeout:10000});

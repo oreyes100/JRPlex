@@ -9,6 +9,7 @@ import { mediaFolderPath, replaceLibraryPath } from './lib/library-mapping.mjs';
 import { createTorrentClient } from './lib/torrents.mjs';
 import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
+import { createCasting } from './lib/casting.mjs';
 
 export { loadConfig } from './lib/security.mjs';
 const projectRoot = dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,8 @@ const publicUser = (user) => ({ Id: user.Id, Name: user.Name, Policy: { IsAdmini
 
 export function createApp(config = loadConfig(), options = {}) {
   const sessions = new Map();
+  let casting;
+  function dropSession(id) { sessions.delete(id); casting?.revokeSession(id); }
   const attempts = new Map();
   const mappingOperations = new Set();
   const torrent = options.torrentClient || createTorrentClient(config);
@@ -40,7 +43,7 @@ export function createApp(config = loadConfig(), options = {}) {
     const found = (req.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`));
     const id = found?.slice(cookieName.length + 1);
     const session = id ? sessions.get(id) : null;
-    if (!session || session.expires <= Date.now()) { if (id) sessions.delete(id); throw new HttpError(401, 'Authentication required'); }
+    if (!session || session.expires <= Date.now()) { if (id) dropSession(id); throw new HttpError(401, 'Authentication required'); }
     return { id, ...session };
   }
   function sameOrigin(req) { if (req.headers.origin !== config.publicUrl) throw new HttpError(403, 'Origin rejected'); }
@@ -83,10 +86,10 @@ export function createApp(config = loadConfig(), options = {}) {
   }
   async function currentUser(session) {
     const response = await upstream('/Users/Me', { session });
-    if (response.status === 401 || response.status === 403) { sessions.delete(session.id); await response.body?.cancel(); throw new HttpError(401, 'Session expired'); }
+    if (response.status === 401 || response.status === 403) { dropSession(session.id); await response.body?.cancel(); throw new HttpError(401, 'Session expired'); }
     if (!response.ok) { await response.body?.cancel(); throw new HttpError(502, 'Media server unavailable'); }
     const user = await jsonResponse(response);
-    if (user.Id !== session.user.Id || user.Policy?.IsDisabled) { sessions.delete(session.id); throw new HttpError(401, 'Session expired'); }
+    if (user.Id !== session.user.Id || user.Policy?.IsDisabled) { dropSession(session.id); throw new HttpError(401, 'Session expired'); }
     return user;
   }
   async function requireAdmin(session) { const user = await currentUser(session); if (!user.Policy?.IsAdministrator) throw new HttpError(403, 'Administrator required'); return user; }
@@ -131,11 +134,11 @@ export function createApp(config = loadConfig(), options = {}) {
     throw new HttpError(403, 'API route is not exposed');
   }
 
-  async function proxy(req, res, route, session) {
+  async function proxy(req, res, route, session, { requestUrl = req.url, mapMediaUrl } = {}) {
     const path = route.slice('/jellyfin'.length);
     const policy = proxyPolicy(path, req.method, session);
     if (policy === 'admin') await requireAdmin(session);
-    const url = cleanQuery(new URL(req.url, config.publicUrl));
+    const url = cleanQuery(new URL(requestUrl, config.publicUrl));
     url.pathname = path;
     if (policy !== 'admin') {
       for (const key of [...url.searchParams.keys()]) if (/^(userId|userIds)$/i.test(key)) url.searchParams.delete(key);
@@ -179,7 +182,7 @@ export function createApp(config = loadConfig(), options = {}) {
     const headers = { ...(requestBody ? { 'Content-Type': 'application/json' } : {}) };
     for (const name of ['range', 'if-range', 'if-none-match', 'if-modified-since']) if (req.headers[name]) headers[name] = req.headers[name];
     const response = await upstream(`${url.pathname}${url.search}`, { session, method: req.method, body: requestBody, headers });
-    if (!response.ok && response.status !== 304) { await response.body?.cancel(); if (response.status === 401) sessions.delete(session.id); throw new HttpError([400, 401, 403, 404, 416].includes(response.status) ? response.status : 502, 'Media request failed'); }
+    if (!response.ok && response.status !== 304) { await response.body?.cancel(); if (response.status === 401) dropSession(session.id); throw new HttpError([400, 401, 403, 404, 416].includes(response.status) ? response.status : 502, 'Media request failed'); }
     if (req.method === 'HEAD' || response.status === 204 || response.status === 304) {
       const outgoing = {};
       for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) if (response.headers.has(name)) outgoing[name] = response.headers.get(name);
@@ -191,7 +194,7 @@ export function createApp(config = loadConfig(), options = {}) {
       send(res, response.status, sanitizeJson(await jsonResponse(response), config, path, includeMediaPaths)); return;
     }
     if (/\.m3u8$/i.test(path) || /(?:mpegurl|vnd\.apple\.mpegurl)/i.test(response.headers.get('content-type') || '')) {
-      const playlist = rewritePlaylist((await boundedBody(response.body, 1024 * 1024, config.upstreamTimeout)).toString(), path, config);
+      const playlist = rewritePlaylist((await boundedBody(response.body, 1024 * 1024, config.upstreamTimeout)).toString(), path, config, mapMediaUrl);
       res.writeHead(response.status, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Content-Length': Buffer.byteLength(playlist) }); res.end(playlist); return;
     }
     const outgoing = {};
@@ -202,7 +205,7 @@ export function createApp(config = loadConfig(), options = {}) {
 
   async function staticFile(req, res, route) {
     if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed');
-    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
+    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/tv': 'tv.html', '/tv/': 'tv.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
     const filename = aliases[route] || route.slice(1);
     if (filename.split('/').some((part) => part.startsWith('.'))) throw new HttpError(404, 'Not found');
     const path = resolve(publicDir, filename);
@@ -218,13 +221,13 @@ export function createApp(config = loadConfig(), options = {}) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), presentation=(self)');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.gstatic.com; worker-src 'self' blob:; font-src 'self'; manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
     if (config.publicUrl.startsWith('https:')) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     try {
       const route = safePath(req.url);
       if (++counters.requests % 100 === 0) {
-        for (const [id, session] of sessions) if (session.expires <= Date.now()) sessions.delete(id);
+        for (const [id, session] of sessions) if (session.expires <= Date.now()) dropSession(id);
         for (const [ip, attempt] of attempts) if (attempt.until < Date.now()) attempts.delete(ip);
       }
       if (route === '/healthz' && ['GET', 'HEAD'].includes(req.method)) { send(res, 200, { status: 'ok' }); return; }
@@ -260,18 +263,20 @@ export function createApp(config = loadConfig(), options = {}) {
         if (!/^[A-Za-z0-9_-]{1,512}$/.test(authenticated.AccessToken || '') || !/^[A-Za-z0-9_-]+$/.test(authenticated.User?.Id || '') || authenticated.User.Policy?.IsDisabled) throw new HttpError(401, 'Sign-in failed');
         if (sessions.size >= 10000) throw new HttpError(503, 'Session capacity reached');
         attempts.delete(bucket);
-        try { const previous = sessionFor(req); sessions.delete(previous.id); } catch {}
+        try { const previous = sessionFor(req); dropSession(previous.id); } catch {}
         const id = opaque();
         const session = { token: authenticated.AccessToken, deviceId, user: publicUser(authenticated.User), csrfToken: opaque(), expires: Date.now() + config.sessionTtl };
         sessions.set(id, session);
         send(res, 200, { user: session.user, csrfToken: session.csrfToken }, { 'Set-Cookie': cookie(id) }); return;
       }
+      if (route.startsWith('/cast/') && await casting.handlePublic(req, res, route)) return;
       if (route.startsWith('/api/') || route.startsWith('/jellyfin/')) {
         const session = sessionFor(req);
         if (mutation(req.method)) csrf(req, session);
+        if (route.startsWith('/api/cast/') && await casting.handle(req, res, route, session)) return;
         if (route === '/api/session' && req.method === 'GET') { const user = publicUser(await currentUser(session)); sessions.get(session.id).user = user; send(res, 200, { user, csrfToken: session.csrfToken }); return; }
         if (route === '/api/logout' && req.method === 'POST') {
-          sessions.delete(session.id);
+          dropSession(session.id);
           try { const response = await upstream('/Sessions/Logout', { session, method: 'POST' }); await response.body?.cancel(); } catch {}
           send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) }); return;
         }
@@ -286,7 +291,7 @@ export function createApp(config = loadConfig(), options = {}) {
           });
           await response.body?.cancel();
           if (!response.ok) throw new HttpError([400, 401, 403].includes(response.status) ? response.status : 502, 'Password change failed');
-          for (const [id, stored] of sessions) if (stored.user.Id === session.user.Id) sessions.delete(id);
+          for (const [id, stored] of sessions) if (stored.user.Id === session.user.Id) dropSession(id);
           try { const logout = await upstream('/Sessions/Logout', { session, method: 'POST' }); await logout.body?.cancel(); } catch {}
           send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) }); return;
         }
@@ -362,7 +367,8 @@ export function createApp(config = loadConfig(), options = {}) {
   };
   const server = http.createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 120000, headersTimeout: 15000 }, handler);
   server.maxRequestsPerSocket = 1000;
-  return { server, handler, sessions, config, close: () => { googleOAuth.close?.(); torrent.close?.(); } };
+  casting = createCasting(config, { sessions, upstream, jsonResponse, currentUser, requireAdmin, torrent, proxy, body, send, sameOrigin, rateLimit, clientIp, now: options.castingNow || Date.now });
+  return { server, handler, sessions, config, close: () => { casting.close(); googleOAuth.close?.(); torrent.close?.(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

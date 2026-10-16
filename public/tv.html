@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101418"><title>JRPlex · Pantalla de TV</title><link rel="icon" href="/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/casting.css"><script src="/vendor/hls.min.js" defer></script><script type="module" src="/tv.js"></script></head>
+<body class="tv-page">
+  <header class="tv-header"><a href="/">JRPlex</a><button id="tv-fullscreen" type="button">Pantalla completa</button></header>
+  <main>
+    <section id="tv-pairing" class="tv-pairing"><h1>Reproduce aquí desde tu móvil o computadora</h1><p>En JRPlex, abre un vídeo y elige <strong>Enviar a TV → Vincular TV / Fire TV</strong>. Introduce este código:</p><p id="tv-code" class="tv-code" aria-live="polite">······</p><p id="tv-expiry"></p><form id="tv-name-form"><label for="tv-name">Nombre de esta pantalla</label><input id="tv-name" maxlength="60" value="Mi TV / Fire TV"><button type="submit">Generar nuevo código</button></form></section>
+    <section id="tv-player" hidden><h1 id="tv-title"></h1><video id="tv-video" controls playsinline preload="metadata"></video><button id="tv-play" type="button" hidden>Reproducir en esta pantalla</button></section>
+    <p id="tv-status" role="status">Preparando vinculación…</p>
+    <p class="tv-note">Fire TV: abre esta página en Silk. Esta pantalla recibe únicamente el vídeo enviado y permanece vinculada mientras la sesión que la controla siga abierta.</p>
+  </main>
+</body>
+</html>

@@ -76,6 +76,9 @@ test('torrent video is served only after its selected pieces verify and deleted 
   assert.ok(filePolls >= 2, 'the qBittorrent 404 while metadata is pending is retried');
   const playback = await client.play(session.id, 0);
   assert.equal(playback.size, 16);
+  assert.equal(client.castSource(session.id, 0).contentType, 'video/mp4');
+  assert.equal(client.castSource(session.id, 0).canSeek, true);
+  assert.throws(() => client.castSource(session.id, 999), /Primero reproduce/);
   assert.equal(clearedPlayLimit, 1, 'the selected video can stream at the normal configured rate');
 
   class FakeResponse extends EventEmitter {

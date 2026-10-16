@@ -11,6 +11,7 @@ JRPlex es un proyecto independiente que integra servidores de terceros; no es Pl
 | Caddy | [Apache-2.0, repositorio](https://github.com/caddyserver/caddy) | Proxy HTTPS opcional |
 | Node.js | [Licencia Node.js y dependencias](https://github.com/nodejs/node/blob/main/LICENSE) | Runtime del gateway y scripts |
 | hls.js | [Apache-2.0, repositorio](https://github.com/video-dev/hls.js) | Reproducción HLS en navegador compatible, activo local y aviso de licencia en public/vendor cuando esté incorporado |
+| Google Cast Web Sender SDK | [Documentación y condiciones Google Cast](https://developers.google.com/cast/docs/web_sender/integrate) | SDK alojado por Google, cargado al abrir Enviar a TV; receptor multimedia predeterminado, sin redistribuir la biblioteca |
 
 Si distribuyes imágenes/binarios o modificaciones de componentes copyleft, conserva sus avisos y cumple las obligaciones de entrega de fuente correspondientes; el gateway es un proceso separado que consume la API. Mantén el logotipo JRPlex propio y atribución de interoperabilidad según la [política de marca Jellyfin](https://jellyfin.org/docs/general/contributing/branding/).
 

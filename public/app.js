@@ -1,4 +1,5 @@
 import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isTypeScriptDeclaration } from './media-eligibility.js';
+import { createCastControls } from './casting-sender.js';
 
 'use strict';
 
@@ -418,8 +419,8 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
   }
   async function reportPlayback(event, keepalive = false) {
     const player = state.player; if (!player?.source || !state.session) return;
-    const video = $('video');
-    await api(`/jellyfin/Sessions/Playing${event ? `/${event}` : ''}`, { method: 'POST', keepalive, body: { ItemId: player.item.Id, MediaSourceId: player.source.Id, PlaySessionId: player.playSessionId, PositionTicks: ticks(video.currentTime), CanSeek: true, IsPaused: video.paused, IsMuted: video.muted, VolumeLevel: Math.round(video.volume * 100), PlayMethod: player.method, EventName: event === 'Progress' ? 'TimeUpdate' : undefined } });
+    const video = $('video'); const remote = player.casting?.playback();
+    await api(`/jellyfin/Sessions/Playing${event ? `/${event}` : ''}`, { method: 'POST', keepalive, body: { ItemId: player.item.Id, MediaSourceId: remote?.mediaSourceId || player.source.Id, PlaySessionId: remote?.playSessionId || player.playSessionId, PositionTicks: ticks(remote?.position ?? video.currentTime), CanSeek: remote?.canSeek ?? true, IsPaused: remote?.paused ?? video.paused, IsMuted: video.muted, VolumeLevel: Math.round(video.volume * 100), PlayMethod: remote?.playMethod || player.method, EventName: event === 'Progress' ? 'TimeUpdate' : undefined } });
   }
   async function stopPlayer(report = true, cancelIntent = true) {
     if (cancelIntent) playIntent++;
@@ -427,10 +428,12 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
     if (!player) { $('player-source-info').textContent = ''; $('player-source-info').hidden = true; if ($('player-dialog').open) $('player-dialog').close(); return; }
     clearInterval(player.timer);
     if (report && player.source) await reportPlayback('Stopped', true).catch(() => {});
+    await player.casting?.dispose();
     if (state.player !== player) return;
     state.player = null; player.hls?.destroy(); $('video').pause(); $('video').removeAttribute('src'); $('video').replaceChildren(); $('video').load();
     $('player-source-info').textContent = ''; $('player-source-info').hidden = true;
     if ($('player-dialog').open) $('player-dialog').close();
+    $('player-cast-controls').replaceChildren();
   }
   async function play(item, position) {
     if (isContainer(item)) return detail(item);
@@ -462,12 +465,16 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
         track.src = `/jellyfin/Videos/${item.Id}/${encodeURIComponent(source.Id)}/Subtitles/${Number(subtitle.Index)}/Stream.vtt`; $('video').append(track);
       }
       const hls = /\.m3u8(?:[?#]|$)/i.test(src);
-      if (hls && !$('video').canPlayType('application/vnd.apple.mpegurl')) {
-        if (!window.Hls?.isSupported()) throw new Error('Este navegador no admite la reproducción HLS requerida.');
+      if (hls && window.Hls?.isSupported()) {
         const engine = new window.Hls({ startPosition: player.pendingSeek || -1 }); player.hls = engine;
         engine.on(window.Hls.Events.ERROR, (_event, data) => { if (state.player !== player) return; if (data.response?.code === 401) { showLogin('La sesión ha terminado. Vuelve a entrar.'); return; } if (data.fatal) { $('player-error').textContent = 'La reproducción se ha interrumpido. Vuelve a abrir el título o prueba otra calidad.'; engine.destroy(); } });
         engine.loadSource(src); engine.attachMedia($('video'));
-      } else $('video').src = src;
+      } else {
+        if (hls && !$('video').canPlayType('application/vnd.apple.mpegurl')) throw new Error('Este navegador no admite la reproducción HLS requerida.');
+        $('video').src = src;
+      }
+      player.casting = createCastControls({ video: $('video'), api, source: () => ({ kind: 'library', itemId: item.Id }), isAuthenticated: () => !!state.session, onChange: remote => { if (state.player !== player) return; $('quality').disabled = isAudio(item) || !!remote; void reportPlayback('Progress').catch(() => {}); } });
+      $('player-cast-controls').replaceChildren(player.casting.element);
       $('player-state').textContent = player.method === 'Transcode' ? 'Adaptando el vídeo para tu navegador' : player.method === 'DirectStream' ? 'Reproducción adaptada' : 'Reproducción directa';
       await $('video').play().catch(() => { if (state.player === player) $('player-state').textContent = 'Pulsa reproducir para empezar.'; });
       if (generation !== state.playerGeneration || state.player !== player) return;
@@ -661,7 +668,8 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
       if (state.torrentStop !== stopFn) return;
       clearTimeout(playbackPoll); playbackIntent++;
       state.torrentStop = null; video.pause(); video.removeAttribute('src'); video.load(); playerArea.replaceChildren();
-      if (keepId === id) return;
+      await stopFn.casting?.dispose();
+      if (keepId === id || state.torrentStop?.sessionId === id) return;
       try { await api(`/api/admin/torrents/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} }); notify('Reproducción detenida; la caché temporal del torrent se eliminó.'); }
       catch (error) { notify(`Reproducción detenida. No se pudo confirmar la limpieza: ${error.message}`, true); }
     };
@@ -680,10 +688,12 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
           const video = el('video', { class: 'torrent-video', controls: true, playsInline: true, preload: 'auto' }); video.src = result.streamUrl;
           const playbackStatus = el('p', { class: 'note', role: 'status' }, 'Esperando las primeras piezas verificadas del torrent…');
           const stop = (keepId) => stopPlayback(session.id, video, stop, keepId); stop.sessionId = session.id; state.torrentStop = stop;
+          const casting = createCastControls({ video, api, source: () => ({ kind: 'torrent', sessionId: session.id, fileIndex: item.index }), isAuthenticated: () => !!state.session, onChange: () => { lastAdvance = Date.now(); } }); stop.casting = casting;
           let playbackFailed = false; let lastTime = 0; let lastAdvance = Date.now();
           const failPlayback = (message) => {
             if (playbackFailed || state.torrentStop !== stop) return;
             playbackFailed = true; clearTimeout(playbackPoll);
+            void casting.dispose();
             playbackStatus.textContent = message; playbackStatus.setAttribute('role', 'alert');
             video.pause(); video.removeAttribute('src'); video.load(); notify(message, true);
           };
@@ -694,8 +704,8 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
               if (state.torrentStop !== stop || playbackFailed) return;
               if (status.error) { failPlayback(status.error); return; }
               if (video.currentTime > lastTime) { lastTime = video.currentTime; lastAdvance = Date.now(); }
-              if (video.readyState < 3 && Date.now() - lastAdvance > 65000) { failPlayback('No llegaron datos reproducibles durante 65 segundos. Revisa los pares del torrent y vuelve a pulsar Reproducir.'); return; }
-              if (video.readyState < 3) playbackStatus.textContent = `Esperando piezas verificadas · ${status.peers} pares · ${formatBytes(status.downloadSpeed)}/s · ${Math.round(status.progress * 100)} % en caché`;
+              if (!casting.active && video.readyState < 3 && Date.now() - lastAdvance > 65000) { failPlayback('No llegaron datos reproducibles durante 65 segundos. Revisa los pares del torrent y vuelve a pulsar Reproducir.'); return; }
+              if (!casting.active && video.readyState < 3) playbackStatus.textContent = `Esperando piezas verificadas · ${status.peers} pares · ${formatBytes(status.downloadSpeed)}/s · ${Math.round(status.progress * 100)} % en caché`;
             } catch (error) { failPlayback(error.message); return; }
             playbackPoll = setTimeout(checkStatus, 2000);
           };
@@ -705,12 +715,12 @@ import { hasPlayableMedia, isDisplayableItem, isPhotoFolder, isPhotoItem, isType
           video.addEventListener('playing', () => { if (playbackFailed) return; lastAdvance = Date.now(); playbackStatus.textContent = 'Reproduciendo desde el torrent; JRPlex convierte el formato si el navegador lo necesita.'; });
           video.addEventListener('stalled', () => { if (playbackFailed) return; playbackStatus.textContent = 'La fuente dejó de enviar datos. Puede que el torrent no tenga pares activos.'; });
           video.addEventListener('error', () => {
-            if (playbackFailed || state.torrentStop !== stop) return;
+            if (playbackFailed || state.torrentStop !== stop || casting.active) return;
             const code = video.error?.code;
             const message = code === 4 ? 'El navegador no reconoce el formato de salida. Revisa el nombre y formato del archivo.' : 'La fuente de torrent no entregó datos reproducibles. Comprueba que tenga pares activos.';
             void api(`/api/admin/torrents/${encodeURIComponent(session.id)}/status`).then(status => failPlayback(status.error || message), () => failPlayback(message));
           });
-          playerArea.append(panel('Reproductor temporal', playbackStatus, el('p', { class: 'note' }, 'Se lee por piezas desde el torrent; los formatos no compatibles con el navegador se convierten en el servidor. Pulsa “Detener” al terminar para borrar el búfer.'), video, button('Detener y borrar búfer', stop, 'small-button')));
+          playerArea.append(panel('Reproductor temporal', playbackStatus, el('p', { class: 'note' }, 'Se lee por piezas desde el torrent; los formatos no compatibles con el navegador se convierten en el servidor. Pulsa “Detener” al terminar para borrar el búfer.'), video, casting.element, button('Detener y borrar búfer', stop, 'small-button')));
           try { await video.play(); } catch (error) { if (error.name === 'NotAllowedError' && !playbackFailed) playbackStatus.textContent = 'Pulsa reproducir en el control de vídeo para iniciar la transmisión.'; }
         }); });
         section.append(el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, label, el('small', {}, `${Math.round(Math.max(0, Math.min(1, Number(item.progress) || 0)) * 100)} % de piezas disponibles en caché`)), playButton));
