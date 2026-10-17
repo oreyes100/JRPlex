@@ -205,7 +205,7 @@ export function createApp(config = loadConfig(), options = {}) {
 
   async function staticFile(req, res, route) {
     if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed');
-    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/tv': 'tv.html', '/tv/': 'tv.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
+    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/tv': 'tv.html', '/tv/': 'tv.html', '/firetv': 'firetv.html', '/firetv/': 'firetv.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
     const filename = aliases[route] || route.slice(1);
     if (filename.split('/').some((part) => part.startsWith('.'))) throw new HttpError(404, 'Not found');
     const path = resolve(publicDir, filename);

@@ -1,5 +1,7 @@
 # JRPlex
 
+**App Fire TV:** [APK e instalación](https://jrplexps.duckdns.org/firetv) · [fuente y build Android](apps/firetv/README.md). Abre JRPlex TV en el Stick y enlázala desde **Enviar a TV** con su código.
+
 Servidor multimedia privado con web propia, usuarios de Jellyfin, bibliotecas locales y nube mediante rclone, y entrada administrativa de magnets/archivos torrent mediante qBittorrent opcional. El gateway mantiene los tokens multimedia en el servidor y entrega al navegador una cookie de sesión opaca. Solo se incorpora a biblioteca el contenido de descargas finalizadas.
 
 **Estado:** primera implementación en evaluación. La instalación o un chequeo sintáctico no prueban publicación, reproducción ni compatibilidad por plataforma. La decisión y evidencia de aceptación viven en [docs/GAUNTLET.md](docs/GAUNTLET.md). No se afirma equivalencia con todas las funciones o aplicaciones de Plex.

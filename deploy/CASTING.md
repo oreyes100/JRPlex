@@ -12,6 +12,8 @@ El SDK oficial se carga desde Google solo cuando abres el panel de envío. Se ut
 
 ## Fire TV / Firestick y televisores con navegador
 
+Para Fire TV con Fire OS se recomienda la **app nativa JRPlex TV**: [descarga e instalación](https://jrplexps.duckdns.org/firetv), [fuente y pruebas](../apps/firetv/README.md). Muestra el código al abrirse, renueva los códigos vencidos y permite usar el mando sin Silk. Los modelos Vega OS requieren otra app. La validación en un Fire TV físico está pendiente.
+
 1. En Fire TV abre **Silk**; en otra TV usa un navegador con soporte MP4/H264/AAC o HLS.
 2. Visita `https://TU-DOMINIO/tv`. Puedes cambiar el nombre de la pantalla. Se muestra un código de seis dígitos que dura cinco minutos.
 3. En el reproductor de tu móvil o computadora, introduce el código y pulsa **Vincular TV / Fire TV y enviar**.

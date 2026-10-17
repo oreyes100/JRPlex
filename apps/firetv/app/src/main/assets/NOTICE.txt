@@ -1,0 +1,28 @@
+JRPlex TV 1.0.0
+
+This distribution includes software from:
+
+AndroidX (including Activity 1.11.0, AppCompat 1.7.1, Media3 1.11.1,
+and their AndroidX transitive dependencies)
+Copyright The Android Open Source Project
+https://github.com/androidx/androidx
+https://github.com/androidx/media
+Apache License 2.0
+
+Guava 33.3.1-android, failureaccess 1.0.2, and listenablefuture
+Copyright Google Inc. / Google LLC
+https://github.com/google/guava
+Apache License 2.0
+
+Kotlin standard library 2.2.10, Kotlin coroutines 1.7.3 and
+JetBrains annotations 23.0.0
+Copyright JetBrains s.r.o. and respective contributors
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.coroutines
+https://github.com/JetBrains/java-annotations
+Apache License 2.0
+
+The full Apache License 2.0 text is included in APACHE-2.0.txt alongside
+this notice. JRPlex is independent of Amazon, Google, Jellyfin and Plex.
+Trademarks belong to their respective owners. A complete resolved runtime
+dependency inventory is published alongside this APK.

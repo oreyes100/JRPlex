@@ -33,8 +33,8 @@ export function createCastControls({ video, api, source, isAuthenticated = () =>
   const screens = node('select'); screens.setAttribute('aria-label', 'Pantalla vinculada');
   const send = node('button', 'Enviar a la pantalla', { type: 'button', className: 'secondary', disabled: true });
   actions.append(google, refreshButton, screens, send);
-  const instructions = node('p', 'TV / Fire TV: abre ', { className: 'cast-note' });
-  instructions.append(node('a', `${location.origin}/tv`, { href: '/tv', target: '_blank', rel: 'noopener' }), document.createTextNode(' en el navegador del televisor (Silk en Fire TV). Introduce aquí el código mostrado.'));
+  const instructions = node('p', 'Fire TV: abre la app JRPlex TV e introduce aquí su código. ', { className: 'cast-note' });
+  instructions.append(node('a', 'Instalar app para Fire TV', { href: '/firetv', target: '_blank', rel: 'noopener' }), document.createTextNode(' · Si usas navegador, abre '), node('a', `${location.origin}/tv`, { href: '/tv', target: '_blank', rel: 'noopener' }), document.createTextNode(' en el televisor.'));
   const form = node('form', '', { className: 'cast-pair' });
   const code = node('input', '', { type: 'text', inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}', required: true, placeholder: '123456', autocomplete: 'off' }); code.setAttribute('aria-label', 'Código de la TV');
   const pair = node('button', 'Vincular TV / Fire TV y enviar', { type: 'submit', className: 'secondary' }); form.append(code, pair);
@@ -97,7 +97,7 @@ export function createCastControls({ video, api, source, isAuthenticated = () =>
       if (result.receivers.some(receiver => receiver.id === selected)) screens.value = selected;
       if (active?.kind === 'tv') {
         const receiver = result.receivers.find(receiver => receiver.id === active.receiverId);
-        if (!receiver || !receiver.online) { const error = new Error('La pantalla dejó de responder. Abre JRPlex /tv y vuelve a vincularla.'); error.status = 404; throw error; }
+        if (!receiver || !receiver.online) { const error = new Error('La pantalla dejó de responder. Abre la app JRPlex TV o /tv y vuelve a vincularla.'); error.status = 404; throw error; }
         contact = Date.now();
         if (receiver.state.mediaId === active.media.id) {
           active.state = receiver.state;

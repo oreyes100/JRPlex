@@ -114,6 +114,28 @@ test('expired codes and receiver secrets are rejected and pairing guesses are bo
   assert.equal((await f.call(session, '/api/cast/pair', { code: '000000' })).status, 429);
 });
 
+test('native TV ending a receiver requires its secret and same origin, and revokes only its media and pairing', async t => {
+  const f = await fixture(t); const owner = await f.login();
+  const installer = await f.request('/firetv'); assert.equal(installer.status, 200);
+  const page = await installer.text(); assert.match(page, /jrplex-firetv-1\.0\.0\.apk/); assert.match(page, /Vega OS/);
+  assert.match(installer.headers.get('content-security-policy'), /default-src 'none'/);
+  const started = await (await f.receiverCall('/cast/receiver/start', { name: 'JRPlex Fire TV' })).json();
+  const receiver = await (await f.call(owner, '/api/cast/pair', { code: started.code })).json();
+  const { media } = await (await f.call(owner, `/api/cast/receivers/${receiver.id}/play`, { kind: 'library', itemId: 'movie' })).json();
+  const other = await (await f.receiverCall('/cast/receiver/start', { name: 'Other screen' })).json();
+  assert.equal((await f.request('/cast/receiver/end', { method: 'POST', headers: { Origin: 'https://evil.invalid', 'Content-Type': 'application/json' }, body: JSON.stringify({ secret: started.secret }) })).status, 403);
+  assert.equal((await f.receiverCall('/cast/receiver/end', { secret: receiver.id })).status, 401);
+  assert.equal((await f.receiverCall('/cast/receiver/end', { secret: 'wrong' })).status, 401);
+  assert.equal((await f.request(media.url)).status, 200);
+  f.state.slow = true; const transfer = await f.request(media.url); const reader = transfer.body.getReader(); await reader.read();
+  assert.equal((await f.receiverCall('/cast/receiver/end', { secret: started.secret })).status, 200);
+  await assert.rejects(reader.read());
+  assert.equal((await f.request(media.url)).status, 401);
+  assert.equal((await f.receiverCall('/cast/receiver/poll', { secret: started.secret, ack: 0 })).status, 401);
+  assert.equal((await f.receiverCall('/cast/receiver/poll', { secret: other.secret, ack: 0 })).status, 200);
+  assert.deepEqual((await (await f.call(owner, '/api/cast/receivers', null, 'GET')).json()).receivers, []);
+});
+
 test('torrent cast uses the already selected stream, requires current admin, and never calls play or delete', async t => {
   const f = await fixture(t); const session = await f.login();
   const response = await f.call(session, '/api/cast/media', { kind: 'torrent', sessionId: 'selected_torrent', fileIndex: 0 }); assert.equal(response.status, 201);

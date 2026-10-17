@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'org.jrplex.tv'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'org.jrplex.tv'
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+    }
+    signingConfigs {
+        release {
+            if (System.getenv('JRP_TV_KEYSTORE')) {
+                storeFile file(System.getenv('JRP_TV_KEYSTORE'))
+                storePassword System.getenv('JRP_TV_STORE_PASSWORD')
+                keyAlias 'jrplex-tv'
+                keyPassword System.getenv('JRP_TV_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (System.getenv('JRP_TV_KEYSTORE')) signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    testOptions { unitTests.includeAndroidResources = true }
+    lint { abortOnError true }
+}
+
+dependencies {
+    implementation 'androidx.activity:activity:1.11.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    def media3 = '1.11.1'
+    implementation "androidx.media3:media3-exoplayer:$media3"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3"
+    implementation "androidx.media3:media3-ui:$media3"
+    implementation "androidx.media3:media3-session:$media3"
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+}
