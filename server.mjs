@@ -78,6 +78,9 @@ export function createApp(config = loadConfig(), options = {}) {
       });
       if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new HttpError(502, 'Upstream redirect rejected'); }
       return response;
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === 'AbortError') throw new HttpError(504, 'La consulta de la biblioteca tardó demasiado en responder. Revisa el montaje de Drive o Jellyfin y vuelve a intentarlo.');
+      throw error;
     } finally { clearTimeout(timer); }
   }
   async function jsonResponse(response) {

@@ -8,7 +8,7 @@ import { torrentInput } from '../lib/torrents.mjs';
 
 async function start(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t, overrides = {}, options = {}) {
-  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false };
+  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0 };
   const user = () => ({ Id: 'alice', Name: 'Alice', Policy: { IsAdministrator: state.admin, IsDisabled: state.disabled } });
   const media = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -37,7 +37,7 @@ async function fixture(t, overrides = {}, options = {}) {
     }
     if (url.pathname === '/Sessions/Logout') { state.logout++; res.writeHead(204); return res.end(); }
     if (url.pathname.startsWith('/Users/alice/Items/')) return json({ Id: url.pathname.split('/').at(-1) }, state.denied ? 404 : 200);
-    if (url.pathname === '/Items') return json({ Items: [{ Id: 'movie', Name: 'A film', Type: 'Movie', MediaType: 'Video', Path: '/private/media/file.mp4', AccessToken: 'TOP_SECRET_TOKEN', Metadata: { ApiKey: 'TOP_SECRET_TOKEN', Url: '/x?api_key=TOP_SECRET_TOKEN' } }] });
+    if (url.pathname === '/Items') { if (state.itemsDelay) await new Promise(resolve => setTimeout(resolve, state.itemsDelay)); return json({ Items: [{ Id: 'movie', Name: 'A film', Type: 'Movie', MediaType: 'Video', Path: '/private/media/file.mp4', AccessToken: 'TOP_SECRET_TOKEN', Metadata: { ApiKey: 'TOP_SECRET_TOKEN', Url: '/x?api_key=TOP_SECRET_TOKEN' } }] }); }
     if (url.pathname === '/Items/photo/Images/Primary') { res.writeHead(200, { 'Content-Type': 'image/jpeg' }); return res.end('photo-thumb'); }
     if (url.pathname === '/Items/movie/PlaybackInfo') return json({ MediaSources: [{ Id: 'source', Path: '/private/media', TranscodingUrl: '/videos/movie/master.m3u8?api_key=TOP_SECRET_TOKEN&MediaSourceId=source' }] });
     if (url.pathname === '/Videos/movie/master.m3u8') { res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' }); return res.end('#EXTM3U\n#EXT-X-MAP:URI="/videos/movie/init.mp4?api_key=TOP_SECRET_TOKEN"\n#EXT-X-KEY:METHOD=AES-128,URI="key?AccessToken=TOP_SECRET_TOKEN"\n/videos/movie/child/seg.ts?api_key=TOP_SECRET_TOKEN\n'); }
@@ -91,6 +91,13 @@ test('health reveals no backend details; anonymous API and streams are denied', 
   assert.equal((await f.request('/api/session')).status, 401);
   assert.equal((await f.request('/jellyfin/Videos/movie/stream.mp4')).status, 401);
   assert.equal(f.state.requests.length, 0);
+});
+
+test('slow Jellyfin catalogue returns an actionable timeout instead of a blank indefinite load', async t => {
+  const f = await fixture(t, { upstreamTimeout: 25 }); const session = await f.login(); f.state.itemsDelay = 100;
+  const response = await f.request('/jellyfin/Items?Recursive=true&Limit=20&IncludeItemTypes=Movie', { headers: { Cookie: session.cookie } });
+  assert.equal(response.status, 504);
+  assert.match((await response.json()).error, /biblioteca.*tardó demasiado/i);
 });
 
 test('admin folder browser is read-only, filters entries, and rejects parent traversal', async (t) => {

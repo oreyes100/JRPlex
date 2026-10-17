@@ -5,7 +5,7 @@ import { createCastControls } from './casting-sender.js';
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name' };
+  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name', pendingLibraryId: null };
   const cloudReturn = new URLSearchParams(window.location.search).get('cloud');
   if (['google-linked', 'google-error', 'google-cancelled'].includes(cloudReturn)) window.history.replaceState(null, '', window.location.pathname);
   let toastTimer; let playIntent = 0;
@@ -147,12 +147,39 @@ import { createCastControls } from './casting-sender.js';
       if (view === 'admin') { if (!state.session?.user.Policy?.IsAdministrator) throw new Error('Se necesita una cuenta administradora.'); await renderAdmin(generation); }
       else if (view === 'photos') await renderPhotos(generation);
       else if (view === 'folders') await renderFolders(generation);
+      else if (view === 'home') await renderHome(generation);
       else await renderCatalogue(generation);
     } catch (error) {
       if (generation === state.generation && state.session) $('content').replaceChildren(empty('No se pudo cargar esta vista', error.message), button('Volver a intentar', () => navigate(view)));
     }
   }
   async function openDriveMapping(type) { state.mappingType = type; state.adminTab = 'libraries'; await navigate('admin'); }
+  async function renderHome(generation) {
+    const userId = state.session?.user?.Id;
+    if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
+    const response = await api(`/jellyfin/Users/${userId}/Views`, { signal: AbortSignal.timeout(12000) });
+    if (generation !== state.generation) return;
+    const libraries = (response?.Items || []).filter(view => validId(view?.Id));
+    const content = $('content');
+    content.replaceChildren(title('Tu biblioteca', 'Elige una biblioteca para explorar su contenido, subcarpetas y origen.'));
+    if (!libraries.length) {
+      content.append(empty('Aún no hay bibliotecas conectadas', 'La portada se cargó; el administrador puede elegir una carpeta local o de Google Drive para empezar.'));
+      if (isAdministrator()) content.append(button('Conectar una biblioteca ↗', () => openDriveMapping('movies'), 'primary'));
+      return;
+    }
+    const grid = el('div', { class: 'folder-library-list home-library-list', role: 'group', 'aria-label': 'Bibliotecas disponibles' });
+    for (const library of libraries) {
+      const kind = ({ movies: 'Películas', tvshows: 'Series', music: 'Música', photos: 'Fotografías', homevideos: 'Fotos y vídeos personales' })[String(library.CollectionType || '').toLowerCase()] || 'Biblioteca';
+      grid.append(button(`▰ ${library.Name || kind} · ${kind}`, () => { state.pendingLibraryId = library.Id; return navigate('folders'); }, 'folder-card'));
+    }
+    content.append(grid);
+    // The resume rail is useful but never gates the initial library screen.
+    void api('/jellyfin/UserItems/Resume?Limit=8&MediaTypes=Video&Fields=Overview', { signal: AbortSignal.timeout(12000) }).then(result => {
+      const items = (result?.Items || []).filter(isDisplayableItem);
+      if (!items.length || generation !== state.generation || !state.session) return;
+      content.append(heading('Continúa donde lo dejaste'), el('div', { class: 'card-grid' }, items.map(card)));
+    }).catch(() => {});
+  }
   async function renderFolders(generation) {
     const userId = state.session?.user?.Id;
     if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
@@ -207,13 +234,15 @@ import { createCastControls } from './casting-sender.js';
       }
       if (!items.length && !total && startIndex === 0) target.append(empty(search ? 'Sin coincidencias' : 'Esta carpeta está vacía', search ? 'Prueba otro nombre de carpeta o archivo.' : 'Esta ubicación no contiene carpetas ni archivos indexados.'));
     };
-    renderLibraryList();
+    const selected = libraries.find(library => library.Id === state.pendingLibraryId);
+    state.pendingLibraryId = null;
+    if (selected) await browse(selected); else renderLibraryList();
   }
 
   async function renderCatalogue(generation) {
     const names = { home: 'Tu biblioteca', movies: 'Películas', series: 'Series', music: 'Música', favorites: 'Favoritos' };
     const orderBy = state.catalogueSort === 'origin' ? 'IsFolder,SortName' : 'SortName,Name';
-    const query = new URLSearchParams({ Recursive: 'true', Limit: '80', StartIndex: '0', SortBy: orderBy, SortOrder: 'Ascending', Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
+    const query = new URLSearchParams({ Recursive: 'true', Limit: '20', StartIndex: '0', SortBy: orderBy, SortOrder: 'Ascending', Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
     if (state.view === 'favorites') query.set('IsFavorite', 'true');
     else query.set('IncludeItemTypes', { home: 'Movie,Series,MusicAlbum,Audio,Video,Episode', movies: 'Movie,Video,Episode', series: 'Series', music: 'MusicAlbum,Audio' }[state.view] || 'Movie,Series,Audio');
     // Album containers have no MediaType. Filter by item type so both albums
@@ -221,7 +250,7 @@ import { createCastControls } from './casting-sender.js';
 
     if (state.view === 'movies') query.set('MediaTypes', 'Video');
     if (state.search) query.set('SearchTerm', state.search);
-    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`), state.view === 'home' && !state.search ? api('/jellyfin/UserItems/Resume?Limit=12&MediaTypes=Video&Fields=Overview').catch(() => null) : Promise.resolve(null)]);
+    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`, { signal: AbortSignal.timeout(25000) }), Promise.resolve(null)]);
     if (generation !== state.generation || !state.session) return;
     if (!Array.isArray(catalogue?.Items)) throw new Error('El catálogo recibido no es válido.');
     const content = $('content'); content.replaceChildren();
@@ -260,7 +289,7 @@ import { createCastControls } from './casting-sender.js';
     if (index < total) {
       const more = el('button', { type: 'button', class: 'secondary load-more' }, 'Cargar más');
       more.addEventListener('click', () => void busy(more, async () => {
-        query.set('StartIndex', String(index)); const next = await api(`/jellyfin/Items?${query}`);
+        query.set('StartIndex', String(index)); const next = await api(`/jellyfin/Items?${query}`, { signal: AbortSignal.timeout(25000) });
         if (generation !== state.generation) return;
         const items = Array.isArray(next?.Items) ? next.Items : []; appendItems(items); index += items.length;
         if (!items.length || index >= total) more.remove();
@@ -392,7 +421,10 @@ import { createCastControls } from './casting-sender.js';
       context.count.textContent = `${context.items.length} fotografías cargadas${context.total > context.cursor ? ' · hay más contenido en esta carpeta' : ''}`;
       context.more.hidden = context.cursor >= context.total || !rows.length;
       context.more.textContent = 'Cargar más fotos';
-      if (!context.items.length && !context.grid.childElementCount) context.grid.append(empty('Esta carpeta está vacía', 'Abre otra carpeta o vuelve a la biblioteca de fotos.'));
+      if (!context.items.length && !context.grid.childElementCount) {
+        context.grid.append(empty('No hay fotografías indexadas en esta carpeta', 'Si las fotos están en Google Drive, un administrador debe revisar la carpeta asignada y guardar la biblioteca de fotos para activar su indexación en Jellyfin.'));
+        if (isAdministrator()) context.grid.append(button('Elegir carpeta de fotos de Google Drive', () => openDriveMapping('photos'), 'primary'));
+      }
     } finally { context.loading = false; context.more.disabled = false; }
   }
   function showPhoto() {
