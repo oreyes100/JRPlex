@@ -486,17 +486,33 @@ test('torrent status is admin-only and preserves actionable errors without expos
 
 test('existing library mapping replaces the root with the chosen folder while keeping its identity', async (t) => {
   const f = await fixture(t); const session = await f.login();
-  f.state.libraries = [{ ItemId: 'drive', Name: 'Drive movies', Locations: ['/media/cloud'], LibraryOptions: { PathInfos: [{ Path: '/media/cloud' }] } }];
+  f.state.libraries = [
+    { ItemId: 'drive', Name: 'Drive movies', Locations: ['/media/cloud'], LibraryOptions: { PathInfos: [{ Path: '/media/cloud' }] } },
+    { ItemId: 'photos', Name: 'Photos', Locations: ['/media/cloud/Photos'], LibraryOptions: { EnablePhotos: true } },
+  ];
   const save = input => f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify(input) });
-  const response = await save({ path: '/media/cloud/Movies', previousPaths: ['/media/cloud'] });
+  const response = await save({ path: '/media/cloud/Videos', previousPaths: ['/media/cloud'] });
   assert.equal(response.status, 200);
-  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Movies']);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Videos']);
   assert.equal(f.state.libraries[0].ItemId, 'drive');
   assert.ok(f.state.requests.some(r => r.path === '/Library/Refresh'), 'validate library structure so new physical folder references are indexed');
   assert.equal((await save({ path: '/media/cloud/Other', previousPaths: ['/media/cloud'] })).status, 409, 'stale clients cannot overwrite a new mapping');
-  assert.equal((await save({ path: '/etc', previousPaths: ['/media/cloud/Movies'] })).status, 400);
-  assert.equal((await save({ path: '/media/cloud/../local', previousPaths: ['/media/cloud/Movies'] })).status, 400);
+  assert.equal((await save({ path: '/etc', previousPaths: ['/media/cloud/Videos'] })).status, 400);
+  assert.equal((await save({ path: '/media/cloud/../local', previousPaths: ['/media/cloud/Videos'] })).status, 400);
   assert.equal(f.state.requests.some(r => r.path === '/Items/drive' && r.method === 'DELETE'), false, 'no library or media deletion');
+});
+
+test('mapping rejects a new library path nested inside another library', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { ItemId: 'photos', Name: 'Photos', Locations: ['/media/cloud/Photos'] },
+    { ItemId: 'drive', Name: 'Drive', Locations: ['/media/cloud/Videos'] },
+  ];
+  const response = await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ path: '/media/cloud/Photos/Family', previousPaths: ['/media/cloud/Videos'] }) });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /se superpone con otra biblioteca/);
+  assert.deepEqual(f.state.libraries[1].Locations, ['/media/cloud/Videos']);
+  assert.equal(f.state.requests.some(r => r.path === '/Library/VirtualFolders/Paths' && r.method !== 'GET'), false);
 });
 
 test('mapping failure restores the previous path and denies viewer or missing-CSRF changes', async (t) => {
@@ -520,6 +536,17 @@ test('remapping an existing photo Drive library enables Jellyfin photo indexing 
   assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Photos']);
   const optionsCall = f.state.requests.find(item => item.path === '/Library/VirtualFolders/LibraryOptions');
   assert.equal(JSON.parse(optionsCall.body).LibraryOptions.EnablePhotos, true);
+  assert.ok(f.state.requests.some(item => item.path === '/Library/Refresh'));
+});
+
+test('remapping can disable photo indexing on a general library', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ ItemId: 'drive', Name: 'Drive', Locations: ['/media/cloud'], LibraryOptions: { EnablePhotos: true, PathInfos: [{ Path: '/media/cloud' }] } }];
+  const response = await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ path: '/media/cloud', previousPaths: ['/media/cloud'], enablePhotos: false }) });
+  assert.equal(response.status, 200);
+  assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, false);
+  const optionsCall = f.state.requests.find(item => item.path === '/Library/VirtualFolders/LibraryOptions');
+  assert.equal(JSON.parse(optionsCall.body).LibraryOptions.EnablePhotos, false);
   assert.ok(f.state.requests.some(item => item.path === '/Library/Refresh'));
 });
 
