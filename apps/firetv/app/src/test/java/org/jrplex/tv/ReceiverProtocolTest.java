@@ -27,6 +27,15 @@ public class ReceiverProtocolTest {
         assertEquals(24500, media.position); assertEquals(ID, media.id); assertTrue(media.canSeek);
         assertEquals(0, ReceiverProtocol.media(SERVER, play(false), 1000).position);
     }
+    @Test public void acceptsOnlySameServerPhotoUrlsForBoundedSlideshows() throws Exception {
+        JSONObject photos = new JSONObject().put("id", ID).put("url", SERVER + "/cast/media/" + ID + "/slideshow")
+                .put("contentType", "application/x-jrplex-slideshow").put("expiresAt", 10000)
+                .put("photos", new org.json.JSONArray().put(new JSONObject().put("name", "One").put("url", SERVER + "/cast/media/" + ID + "/photo/photo1")));
+        ReceiverProtocol.Media result = ReceiverProtocol.media(SERVER, new JSONObject().put("media", photos), 1000);
+        assertEquals(1, result.photos.size()); assertFalse(result.canSeek);
+        photos.getJSONArray("photos").put(new JSONObject().put("name", "Bad").put("url", "https://evil.example/photo.jpg"));
+        assertThrows(IllegalArgumentException.class, () -> ReceiverProtocol.media(SERVER, new JSONObject().put("media", photos), 1000));
+    }
     @Test public void rejectsExternalExpiredOrUnscopedSources() throws Exception {
         JSONObject input = play(true); JSONObject media = input.getJSONObject("media");
         for (String url : new String[]{"https://evil.example/cast/media/" + ID + "/torrent", SERVER + ".evil.example/cast/media/" + ID + "/torrent", SERVER + "/api/private", SERVER + "/cast/media/" + "b".repeat(43) + "/torrent", SERVER + "/cast/media/" + ID + "/torrent#secret"}) {

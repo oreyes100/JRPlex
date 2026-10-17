@@ -44,6 +44,15 @@ test('does not mistake TypeScript declaration files for transport-stream video',
   assert.equal(hasPlayableMedia(transportStream), false, 'transport streams are excluded from the catalog');
 });
 
+test('never lists subtitle and companion files as playable videos, even with stale stream metadata', () => {
+  for (const extension of ['.srt', '.ass', '.ssa', '.sub', '.idx', '.sup', '.vtt', '.nfo', '.cue', '.iso']) {
+    const item = { Type: 'Video', MediaType: 'Video', Name: `Episode${extension}`, JRPlexMediaExtension: extension, MediaStreams: [{ Type: 'Video', Codec: 'h264' }] };
+    assert.equal(hasPlayableMedia(item), false, extension);
+    assert.equal(isDisplayableItem(item), false, extension);
+  }
+  assert.equal(isDisplayableItem({ Type: 'PhotoAlbum', IsFolder: true }), true);
+});
+
 test('identifies photos and navigable photo folders without mixing them into video playback', () => {
   assert.equal(isPhotoItem({ Type: 'Photo' }), true);
   assert.equal(isPhotoFolder({ Type: 'PhotoAlbum', IsFolder: true }), true);

@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const video = $('tv-video');
-let secret; let ack = 0; let timer; let expiresAt = 0; let media = null; let hls; let pendingSeek = 0; let status = 'ready'; let generation = 0;
+let secret; let ack = 0; let timer; let photoTimer; let expiresAt = 0; let media = null; let hls; let pendingSeek = 0; let status = 'ready'; let generation = 0; let photoShow = null; let photoIndex = 0; let photoPaused = false;
 async function request(path, data) {
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -12,7 +12,20 @@ async function request(path, data) {
 }
 function clearVideo() {
   hls?.destroy(); hls = null; media = null; status = 'ready'; pendingSeek = 0;
+  clearInterval(photoTimer); photoTimer = null; photoShow = null; photoIndex = 0; photoPaused = false;
+  $('tv-photo').hidden = true; $('tv-photo').removeAttribute('src'); video.hidden = false;
   video.pause(); video.removeAttribute('src'); video.load(); $('tv-player').hidden = true; $('tv-play').hidden = true;
+}
+function showPhoto(index) {
+  if (!photoShow?.length) return;
+  photoIndex = (index + photoShow.length) % photoShow.length;
+  $('tv-photo').alt = photoShow[photoIndex].name || `Fotografía ${photoIndex + 1}`;
+  $('tv-photo').src = photoShow[photoIndex].url;
+  $('tv-status').textContent = `Presentación · ${photoIndex + 1} de ${photoShow.length}`;
+}
+function runPhotoShow() {
+  clearInterval(photoTimer);
+  if (!photoPaused && photoShow?.length) photoTimer = setInterval(() => showPhoto(photoIndex + 1), 4000);
 }
 async function play() {
   try { await video.play(); $('tv-play').hidden = true; }
@@ -27,6 +40,11 @@ async function apply(command) {
     if (url.origin !== location.origin || !/^\/cast\/media\/[A-Za-z0-9_-]{43}\//.test(url.pathname)) throw new Error('Fuente de TV no válida.');
     clearVideo(); media = command.media; pendingSeek = media.canSeek ? command.position : 0; status = 'buffering';
     $('tv-title').textContent = media.title; $('tv-pairing').hidden = true; $('tv-player').hidden = false;
+    if (media.contentType === 'application/x-jrplex-slideshow') {
+      const prefix = `/cast/media/${media.id}/photo/`;
+      if (!url.pathname.endsWith('/slideshow') || !Array.isArray(media.photos) || !media.photos.length || media.photos.length > 100 || media.photos.some(photo => { try { const target = new URL(photo.url); return target.origin !== location.origin || !target.pathname.startsWith(prefix) || target.search || target.hash; } catch { return true; } })) throw new Error('La presentación contiene una fuente de foto no válida.');
+      photoShow = media.photos; photoPaused = false; photoIndex = 0; video.hidden = true; $('tv-photo').hidden = false; status = 'playing'; showPhoto(0); runPhotoShow(); return;
+    }
     $('tv-status').textContent = 'Preparando el vídeo recibido…';
     if (/mpegurl/i.test(media.contentType) && window.Hls?.isSupported()) {
       hls = new window.Hls({ startPosition: pendingSeek || -1 });
@@ -37,15 +55,16 @@ async function apply(command) {
       video.src = url.href;
     }
     void play();
-  } else if (command.command === 'pause') video.pause();
-  else if (command.command === 'resume') await play();
+  } else if (command.command === 'pause') { if (photoShow) { photoPaused = true; runPhotoShow(); status = 'paused'; $('tv-status').textContent = `Presentación en pausa · ${photoIndex + 1} de ${photoShow.length}`; } else video.pause(); }
+  else if (command.command === 'resume') { if (photoShow) { photoPaused = false; status = 'playing'; runPhotoShow(); } else await play(); }
+  else if (command.command === 'seek' && photoShow && Number.isFinite(command.position)) showPhoto(Math.floor(command.position / 4));
   else if (command.command === 'seek' && media?.canSeek && Number.isFinite(video.duration)) video.currentTime = Math.min(command.position, Math.max(0, video.duration - 0.1));
   else if (command.command === 'stop') { clearVideo(); $('tv-status').textContent = 'Pantalla vinculada. Elige otro vídeo en JRPlex para enviarlo aquí.'; }
 }
 async function poll(run) {
   if (!secret || run !== generation) return;
   try {
-    const result = await request('/cast/receiver/poll', { secret, ack, state: { mediaId: media?.id || null, status, position: Number.isFinite(video.currentTime) ? video.currentTime : 0, duration: Number.isFinite(video.duration) ? video.duration : 0, paused: video.paused } });
+    const result = await request('/cast/receiver/poll', { secret, ack, state: { mediaId: media?.id || null, status, position: photoShow ? photoIndex * 4 : Number.isFinite(video.currentTime) ? video.currentTime : 0, duration: photoShow ? photoShow.length * 4 : Number.isFinite(video.duration) ? video.duration : 0, paused: photoShow ? photoPaused : video.paused } });
     if (run !== generation) return;
     if (result.paired && !media) { $('tv-pairing').hidden = true; $('tv-status').textContent = 'Pantalla vinculada. Ya puedes enviar el vídeo desde JRPlex.'; }
     for (const command of result.commands) {
@@ -74,6 +93,7 @@ video.addEventListener('pause', () => { if (media && !['blocked', 'ended', 'erro
 video.addEventListener('waiting', () => { if (media && !['blocked', 'error'].includes(status)) status = 'buffering'; });
 video.addEventListener('ended', () => { if (media) status = 'ended'; });
 video.addEventListener('error', () => { if (media) { status = 'error'; video.dataset.playbackError = `media-${video.error?.code}: ${video.error?.message || ''}`.slice(0, 180); $('tv-status').textContent = 'La TV no pudo leer el vídeo. Comprueba la conexión o vuelve a enviarlo.'; } });
+$('tv-photo').addEventListener('error', () => { if (photoShow) { status = 'error'; $('tv-status').textContent = 'No se pudo cargar una fotografía. Comprueba la conexión con JRPlex.'; } });
 $('tv-play').addEventListener('click', () => void play());
 $('tv-name-form').addEventListener('submit', event => { event.preventDefault(); void start(); });
 $('tv-fullscreen').addEventListener('click', () => { const target = media ? video : document.documentElement; void target.requestFullscreen?.().catch(() => { $('tv-status').textContent = 'Usa el control de pantalla completa de tu navegador o del vídeo.'; }); });

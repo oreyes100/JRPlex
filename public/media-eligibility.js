@@ -3,7 +3,8 @@ const VIDEO_EXTENSIONS = new Set([
 ]);
 const AUDIO_EXTENSIONS = new Set(['.aac', '.aif', '.aiff', '.alac', '.flac', '.m4a', '.mp3', '.oga', '.ogg', '.opus', '.wav', '.wma']);
 const VIDEO_TYPES = new Set(['Movie', 'Video', 'Episode', 'Recording', 'MusicVideo']);
-const CONTAINER_TYPES = new Set(['Series', 'Season', 'MusicAlbum', 'MusicArtist', 'Folder', 'CollectionFolder', 'BoxSet']);
+const CONTAINER_TYPES = new Set(['Series', 'Season', 'MusicAlbum', 'MusicArtist', 'Folder', 'CollectionFolder', 'BoxSet', 'PhotoAlbum']);
+const NON_MEDIA_EXTENSIONS = new Set(['.ass', '.cue', '.idx', '.jpeg', '.jpg', '.lrc', '.nfo', '.pdf', '.png', '.smi', '.srt', '.ssa', '.sub', '.sup', '.text', '.txt', '.vtt', '.webp', '.xml', '.json', '.bin', '.iso', '.img', '.d.ts', '.d.mts', '.d.cts']);
 const TYPESCRIPT_DECLARATION = /\.d\.(?:ts|mts|cts)$/i;
 
 function extensionOf(item) {
@@ -17,6 +18,8 @@ export function isTypeScriptDeclaration(item) {
 
 export function hasPlayableMedia(item) {
   if (isTypeScriptDeclaration(item)) return false;
+  if (NON_MEDIA_EXTENSIONS.has(extensionOf(item))) return false;
+  if (isPhotoItem(item)) return false;
   // MPEG transport-stream captures (.ts) are not a reliably playable source
   // in the supported browser player; never classify TypeScript as media.
   if (extensionOf(item) === '.ts') return false;
@@ -27,9 +30,11 @@ export function hasPlayableMedia(item) {
   const isAudio = item?.MediaType === 'Audio' || item?.Type === 'Audio';
   const type = isAudio ? 'Audio' : 'Video';
   if (streams.some((stream) => stream?.Type === type)) return true;
+  if (streams.length) return false;
   const extension = extensionOf(item);
-  if (isAudio) return AUDIO_EXTENSIONS.has(extension);
-  return VIDEO_EXTENSIONS.has(extension) && (item?.MediaType === 'Video' || VIDEO_TYPES.has(item?.Type));
+  if (isAudio) return AUDIO_EXTENSIONS.has(extension) || item?.Type === 'Audio';
+  if (VIDEO_TYPES.has(item?.Type)) return !extension || VIDEO_EXTENSIONS.has(extension);
+  return VIDEO_EXTENSIONS.has(extension) && item?.MediaType === 'Video';
 }
 
 export function isDisplayableItem(item) {

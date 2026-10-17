@@ -29,8 +29,12 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.net.URLEncoder;
+import java.util.Collections;
+import java.util.Date;
+import java.util.Locale;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -50,7 +54,10 @@ public class BrowseActivity extends AppCompatActivity {
     private AccountStore store;
     private String server, token, linkSecret, userName = "", activeItem;
     private JSONObject activeMedia;
-    private boolean photoVisible, browsing, preparing;
+    private boolean photoVisible, browsing, preparing, slideshowActive;
+    private int photoIndex;
+    private final ArrayList<JSONObject> photoItems = new ArrayList<>();
+    private final Runnable slideshowStep = new Runnable() { @Override public void run() { if (!photoVisible || !slideshowActive || photoItems.isEmpty()) return; photoIndex = (photoIndex + 1) % photoItems.size(); showPhoto(true); handler.postDelayed(this, 4000); } };
     private final java.util.concurrent.atomic.AtomicBoolean progressPending = new java.util.concurrent.atomic.AtomicBoolean();
     private long codeExpires;
     private int linkFailures;
@@ -61,8 +68,9 @@ public class BrowseActivity extends AppCompatActivity {
         @Override protected int sizeOf(String key, Bitmap bitmap) { return bitmap.getAllocationByteCount(); }
     };
     static final class Entry {
-        final String kind, parent, search, title; final int offset;
-        Entry(String kind, String parent, String search, int offset, String title) { this.kind = kind; this.parent = parent; this.search = search; this.offset = offset; this.title = title; }
+        final String kind, parent, search, title, sort; final int offset;
+        Entry(String kind, String parent, String search, int offset, String title) { this(kind, parent, search, offset, title, kind.equals("photos") ? "date" : "name"); }
+        Entry(String kind, String parent, String search, int offset, String title, String sort) { this.kind = kind; this.parent = parent; this.search = search; this.offset = offset; this.title = title; this.sort = sort; }
     }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -98,7 +106,7 @@ public class BrowseActivity extends AppCompatActivity {
             catch (Exception error) { store.clear(); handler.post(() -> { if (run == generation && foreground) startLink(); }); }
         });
     }
-    @Override public void onStop() { foreground = false; ++generation; handler.removeCallbacksAndMessages(null); stopPlayback(); photograph.setVisibility(View.GONE); photoVisible = false; super.onStop(); }
+    @Override public void onStop() { foreground = false; ++generation; handler.removeCallbacksAndMessages(null); stopSlideshow(); stopPlayback(); photograph.setVisibility(View.GONE); photoVisible = false; super.onStop(); }
     @Override public void onDestroy() { player.release(); imageCache.evictAll(); io.shutdown(); images.shutdownNow(); super.onDestroy(); }
     private interface Result { void accept(JSONObject result) throws Exception; }
     private void request(String method, String path, JSONObject input, Result action) {
@@ -170,20 +178,67 @@ public class BrowseActivity extends AppCompatActivity {
         String[] names = {"Inicio", "Continuar", "Películas", "Series", "Música", "Fotos"}; String[] kinds = {"home", "resume", "movies", "series", "music", "photos"};
         for (int i = 0; i < names.length; i++) { String name = names[i], kind = kinds[i]; button(nav, name, () -> { history.clear(); browse(new Entry(kind, "", "", 0, name), false); }); }
         button(nav, "Buscar", this::search); button(nav, "Cuenta", this::account);
-        RecyclerView grid = new RecyclerView(this); grid.setId(GRID); grid.setLayoutManager(new GridLayoutManager(this, 5)); grid.setClipToPadding(false); grid.setPadding(0, dp(8), 0, dp(8)); content.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
+        RecyclerView grid = new RecyclerView(this); grid.setId(GRID); GridLayoutManager layout = new GridLayoutManager(this, 5); layout.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() { @Override public int getSpanSize(int position) { RecyclerView.Adapter<?> adapter = grid.getAdapter(); return adapter instanceof CatalogAdapter && ((CatalogAdapter) adapter).isHeader(position) ? 5 : 1; } }); grid.setLayoutManager(layout); grid.setClipToPadding(false); grid.setPadding(0, dp(8), 0, dp(8)); content.addView(grid, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout pages = new LinearLayout(this); pages.setGravity(Gravity.CENTER); content.addView(pages);
+        button(nav, "Ordenar", () -> chooseSort(next));
         message("Cargando biblioteca…");
-        String path = "/api/tv/catalog?kind=" + encode(next.kind) + "&parent=" + encode(next.parent) + "&search=" + encode(next.search) + "&offset=" + next.offset;
+        String path = "/api/tv/catalog?kind=" + encode(next.kind) + "&parent=" + encode(next.parent) + "&search=" + encode(next.search) + "&offset=" + next.offset + "&sort=" + encode(next.sort);
         request("GET", path, null, result -> {
-            JSONArray list = result.getJSONArray("items"); ArrayList<JSONObject> items = new ArrayList<>(); for (int i = 0; i < list.length(); i++) items.add(list.getJSONObject(i));
+            JSONArray list = result.getJSONArray("items"); ArrayList<JSONObject> sourceItems = new ArrayList<>(); if (next.offset == 0) photoItems.clear(); for (int i = 0; i < list.length(); i++) { JSONObject item = list.getJSONObject(i); if (visible(item, next.kind)) { sourceItems.add(item); if (item.optString("Type").equals("Photo") && !photoItems.contains(item)) photoItems.add(item); } }
+            if (next.sort.equals("type")) Collections.sort(sourceItems, (a, b) -> { int order = a.optString("Type", a.optString("MediaType")).compareToIgnoreCase(b.optString("Type", b.optString("MediaType"))); return order != 0 ? order : a.optString("Name").compareToIgnoreCase(b.optString("Name")); });
+            if (next.sort.equals("origin")) Collections.sort(sourceItems, (a, b) -> Boolean.compare(b.optBoolean("IsFolder"), a.optBoolean("IsFolder")));
+            ArrayList<JSONObject> items = new ArrayList<>(); String previousPhotoDay = null;
+            for (JSONObject item : sourceItems) {
+                if (next.kind.equals("photos") && item.optString("Type").equals("Photo")) {
+                    String day = photoDay(item.optString("DateCreated"));
+                    if (!day.equals(previousPhotoDay)) { items.add(new JSONObject().put("_section", day)); previousPhotoDay = day; }
+                }
+                items.add(item);
+            }
             grid.setAdapter(new CatalogAdapter(items, generation));
-            if (next.offset > 0) button(pages, "Página anterior", () -> browse(new Entry(next.kind, next.parent, next.search, Math.max(0, next.offset - 40), next.title), false));
-            int total = result.getInt("total"); label(pages, total == 0 ? "Sin resultados" : (next.offset + 1) + "–" + (next.offset + items.size()) + " de " + total, 15);
-            if (next.offset + items.size() < total) button(pages, "Página siguiente", () -> browse(new Entry(next.kind, next.parent, next.search, next.offset + 40, next.title), false));
-            message(items.isEmpty() ? "No hay contenido en esta vista. Prueba otra biblioteca o búsqueda." : "Elige un título con el mando. Atrás vuelve a la vista anterior.");
+            if (next.offset > 0) button(pages, "Página anterior", () -> browse(new Entry(next.kind, next.parent, next.search, Math.max(0, next.offset - 40), next.title, next.sort), false));
+            int total = result.getInt("total"); int pageEnd = Math.min(next.offset + 40, total); label(pages, total == 0 ? "Sin resultados" : (next.offset + 1) + "–" + pageEnd + " de " + total, 15);
+            if (next.offset + 40 < total) button(pages, "Página siguiente", () -> browse(new Entry(next.kind, next.parent, next.search, next.offset + 40, next.title, next.sort), false));
+            message(sourceItems.isEmpty() ? "No hay contenido en esta vista. Prueba otra biblioteca o búsqueda." : next.kind.equals("photos") ? "Fotos agrupadas por fecha; abre una carpeta o pulsa una foto para ver la presentación." : "Elige un título con el mando. Atrás vuelve a la vista anterior.");
             if (!items.isEmpty()) grid.post(() -> { if (grid.getChildCount() > 0) grid.getChildAt(0).requestFocus(); });
         });
     }
+    private void chooseSort(Entry current) {
+        String[] labels = current.kind.equals("photos") ? new String[]{"Fecha · día", "Nombre", "Carpetas"} : new String[]{"Nombre", "Tipo", "Origen / carpetas"};
+        String[] values = current.kind.equals("photos") ? new String[]{"date", "name", "origin"} : new String[]{"name", "type", "origin"};
+        int selected = 0; for (int i = 0; i < values.length; i++) if (values[i].equals(current.sort)) selected = i;
+        new AlertDialog.Builder(this).setTitle("Organizar " + current.title).setSingleChoiceItems(labels, selected, (dialog, which) -> { dialog.dismiss(); browse(new Entry(current.kind, current.parent, current.search, 0, current.title, values[which]), false); }).setNegativeButton("Cancelar", null).show();
+    }
+    private boolean visible(JSONObject item, String kind) {
+        if (item.has("_section")) return true;
+        String type = item.optString("Type");
+        if (item.optBoolean("IsFolder") || type.matches("Series|Season|MusicAlbum|CollectionFolder|Folder|MusicArtist|Playlist|PhotoAlbum|BoxSet")) return true;
+        if (kind.equals("photos")) return type.equals("Photo") || item.optString("MediaType").equals("Photo");
+        if (type.equals("Photo") || item.optString("MediaType").equals("Photo")) return kind.equals("home");
+        String name = item.optString("Name").toLowerCase(Locale.ROOT);
+        if (name.matches(".*\\.(srt|ass|ssa|sub|idx|sup|vtt|smi|nfo|txt|lrc)$")) return false;
+        return item.optBoolean("Playable", false);
+    }
+    private String photoDay(String raw) {
+        try {
+            if (raw.length() < 10) return "Fecha no disponible";
+            Date date = new SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(raw.substring(0, 10));
+            return date == null ? "Fecha no disponible" : new SimpleDateFormat("yyyy · MMMM · d", new Locale("es", "MX")).format(date);
+        }
+        catch (Exception ignored) { return "Fecha no disponible"; }
+    }
+    private void openPhoto(JSONObject item, boolean slideshow) {
+        if (photoVisible && !slideshow) stopSlideshow();
+        int index = photoItems.indexOf(item); if (index < 0) return;
+        photoIndex = index; showPhoto(slideshow); photoVisible = true;
+        if (slideshow) { slideshowActive = true; scheduleSlideshow(); }
+    }
+    private void choosePhoto(JSONObject item) {
+        int index = photoItems.indexOf(item); if (index < 0) return;
+        new AlertDialog.Builder(this).setTitle(item.optString("Name", "Fotografía")).setItems(new String[]{"Ver fotografía", "Iniciar presentación"}, (dialog, which) -> openPhoto(item, which == 1)).setNegativeButton("Volver", null).show();
+    }
+    private void stopSlideshow() { slideshowActive = false; handler.removeCallbacks(slideshowStep); }
+    private void scheduleSlideshow() { handler.removeCallbacks(slideshowStep); handler.postDelayed(slideshowStep, 4000); }
     private void search() {
         EditText input = new EditText(this); input.setSingleLine(); input.setText(entry.search);
         new AlertDialog.Builder(this).setTitle("Buscar en mi biblioteca").setView(input).setNegativeButton("Cancelar", null).setPositiveButton("Buscar", (dialog, which) -> browse(new Entry("home", "", input.getText().toString().trim(), 0, "Buscar"), true)).show();
@@ -207,7 +262,8 @@ public class BrowseActivity extends AppCompatActivity {
     private void select(JSONObject summary) {
         String id = summary.optString("Id"); String type = summary.optString("Type");
         if (summary.optBoolean("IsFolder") || type.matches("Series|Season|MusicAlbum|CollectionFolder|Folder|MusicArtist|Playlist")) { browse(new Entry(entry.kind, id, "", 0, summary.optString("Name")), true); return; }
-        if (type.equals("Photo")) { showPhoto(id); return; }
+        if (type.equals("Photo")) { choosePhoto(summary); return; }
+        if (!summary.optBoolean("Playable", false)) { message("Este elemento no es un vídeo ni una pista de audio reproducible. Los subtítulos y archivos auxiliares no aparecen como títulos."); return; }
         request("GET", "/api/tv/item?id=" + encode(id), null, item -> {
             double position = item.optDouble("Position", 0); String overview = item.optString("Overview");
             AlertDialog.Builder dialog = new AlertDialog.Builder(this).setTitle(item.optString("Name")).setMessage(overview.isEmpty() ? "Reproducir en esta TV" : overview).setNegativeButton("Volver", null);
@@ -241,23 +297,33 @@ public class BrowseActivity extends AppCompatActivity {
         if (status == null || activeMedia == null) return;
         String state = player.status();
         if (state.equals("playing")) status.setVisibility(View.GONE);
-        else if (state.equals("error")) message("No se pudo reproducir. Pulsa Atrás para volver a intentarlo.");
+        else if (state.equals("error")) message("No se pudo reproducir (" + player.failureReason() + "). Revisa la conexión o el formato del archivo; pulsa Atrás para volver a elegir.");
         else if (state.equals("ended")) { stopPlayback(); browse(entry, false); message("La reproducción terminó. Elige otro título."); }
         else message(state.equals("paused") ? "En pausa · pulsa ▶/Ⅱ para continuar" : "Cargando vídeo…");
     }
-    private void showPhoto(String id) {
+    private void showPhoto(boolean slideshow) {
+        if (photoItems.isEmpty() || photoIndex < 0 || photoIndex >= photoItems.size()) return;
+        JSONObject item = photoItems.get(photoIndex); String id = item.optString("Id"); int index = photoIndex;
         int run = generation; TvApi target = api; content.setVisibility(View.GONE); photograph.setImageDrawable(null); photograph.setVisibility(View.VISIBLE); photoVisible = true; message("Cargando foto…");
-        images.execute(() -> { try { byte[] bytes = target.image("/api/tv/photo?id=" + encode(id)); Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length); handler.post(() -> { if (run == generation && foreground && photoVisible) { photograph.setImageBitmap(bitmap); message("Foto · pulsa Atrás para volver a la biblioteca"); } }); }
+        images.execute(() -> { try { byte[] bytes = target.image("/api/tv/photo?id=" + encode(id)); Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length); handler.post(() -> { if (run == generation && foreground && photoVisible && index == photoIndex) { photograph.setImageBitmap(bitmap); message(slideshow ? "Presentación · " + (index + 1) + " de " + photoItems.size() + " · pulsa Atrás para cerrar" : "Foto · usa ◀/▶ para navegar o Atrás para volver"); } }); }
             catch (Exception error) { handler.post(() -> { if (run == generation && foreground && photoVisible) message("No se pudo cargar la foto. Pulsa Atrás."); }); } });
     }
     private void back() {
         if (activeMedia != null) { new AlertDialog.Builder(this).setTitle("¿Volver a la biblioteca?").setNegativeButton("Seguir viendo", (d, w) -> player.focus()).setPositiveButton("Guardar y volver", (d, w) -> { stopPlayback(); browse(entry, false); }).show(); }
-        else if (photoVisible) { photograph.setVisibility(View.GONE); photograph.setImageDrawable(null); photoVisible = false; content.setVisibility(View.VISIBLE); }
+        else if (photoVisible) { stopSlideshow(); photograph.setVisibility(View.GONE); photograph.setImageDrawable(null); photoVisible = false; content.setVisibility(View.VISIBLE); }
         else if (browsing && !history.isEmpty()) browse(history.pop(), false);
         else if (browsing && !entry.kind.equals("home")) browse(new Entry("home", "", "", 0, "Biblioteca"), false);
         else finish();
     }
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (photoVisible) {
+            int key = event.getKeyCode();
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                if (key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) { photoIndex = (photoIndex + 1) % Math.max(1, photoItems.size()); showPhoto(slideshowActive); if (slideshowActive) scheduleSlideshow(); return true; }
+                if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND) { photoIndex = (photoIndex - 1 + Math.max(1, photoItems.size())) % Math.max(1, photoItems.size()); showPhoto(slideshowActive); if (slideshowActive) scheduleSlideshow(); return true; }
+                if (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) { slideshowActive = !slideshowActive; if (slideshowActive) scheduleSlideshow(); else handler.removeCallbacks(slideshowStep); message(slideshowActive ? "Presentación iniciada" : "Presentación en pausa"); return true; }
+            }
+        }
         if (activeMedia != null) {
             int key = event.getKeyCode();
             if (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || key == KeyEvent.KEYCODE_MEDIA_PLAY || key == KeyEvent.KEYCODE_MEDIA_PAUSE) {
@@ -270,13 +336,17 @@ public class BrowseActivity extends AppCompatActivity {
     private final class CatalogAdapter extends RecyclerView.Adapter<Card> {
         private final ArrayList<JSONObject> items; private final int run;
         CatalogAdapter(ArrayList<JSONObject> items, int run) { this.items = items; this.run = run; }
+        boolean isHeader(int index) { return index >= 0 && index < items.size() && items.get(index).has("_section"); }
+        @Override public int getItemViewType(int position) { return isHeader(position) ? 1 : 0; }
         @Override public Card onCreateViewHolder(ViewGroup parent, int type) {
+            if (type == 1) { TextView header = new TextView(BrowseActivity.this); header.setTextColor(Color.rgb(73, 211, 200)); header.setTextSize(21); header.setPadding(dp(12), dp(12), dp(12), dp(6)); return new Card(header, null, header); }
             LinearLayout view = new LinearLayout(BrowseActivity.this); view.setOrientation(LinearLayout.VERTICAL); view.setPadding(dp(8), dp(8), dp(8), dp(8)); view.setFocusable(true); view.setClickable(true); view.setBackgroundResource(R.drawable.tv_card);
             ImageView image = new ImageView(BrowseActivity.this); image.setScaleType(ImageView.ScaleType.CENTER_CROP); view.addView(image, new LinearLayout.LayoutParams(-1, dp(138)));
             TextView title = label(view, "", 16); title.setMaxLines(2); title.setMinHeight(dp(44)); return new Card(view, image, title);
         }
         @Override public void onBindViewHolder(Card holder, int index) {
-            JSONObject item = items.get(index); String id = item.optString("Id"); holder.image.setImageDrawable(null); holder.title.setText((item.optBoolean("IsFolder") ? "▣ " : "") + item.optString("Name")); holder.itemView.setOnClickListener(view -> select(item)); holder.itemView.setContentDescription(item.optString("Name"));
+            JSONObject item = items.get(index); if (item.has("_section")) { holder.title.setText(item.optString("_section")); holder.itemView.setOnClickListener(null); holder.itemView.setFocusable(false); return; }
+            String id = item.optString("Id"); holder.image.setVisibility(View.VISIBLE); holder.image.setImageDrawable(null); holder.title.setText((item.optBoolean("IsFolder") ? "▣ " : "") + item.optString("Name")); holder.itemView.setOnClickListener(view -> select(item)); holder.itemView.setContentDescription(item.optString("Name")); holder.itemView.setFocusable(true);
             holder.image.setTag(id); Bitmap cached = imageCache.get(id); if (cached != null) holder.image.setImageBitmap(cached);
             else if (item.optBoolean("Image")) { TvApi target = api; images.execute(() -> { try { byte[] bytes = target.image("/api/tv/image?id=" + encode(id)); Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length); handler.post(() -> { if (run == generation && foreground && bitmap != null) { imageCache.put(id, bitmap); if (id.equals(holder.image.getTag())) holder.image.setImageBitmap(bitmap); } }); } catch (Exception ignored) { } }); }
         }

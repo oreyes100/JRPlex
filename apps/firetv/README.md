@@ -1,14 +1,14 @@
-# JRPlex TV 2.0.0 · cliente autónomo Fire OS
+# JRPlex TV 2.1.0 · cliente autónomo Fire OS
 
-La app abre y reproduce tu biblioteca con el mando: películas, series y temporadas, álbumes/pistas, fotos, búsqueda, paginación y continuar donde lo dejaste. El teléfono se usa para vincular la cuenta una vez; después puedes cerrarlo. Media3 reproduce el contenido desde el servidor, sin PC, Silk, WebView, Google Play Services ni Fling. Requiere API23+ (Fire OS6+); **Vega OS no admite esta APK**.
+La app abre y reproduce tu biblioteca con el mando: películas, series y temporadas, álbumes/pistas, fotos agrupadas por fecha, búsqueda, paginación y continuar donde lo dejaste. También ofrece orden por nombre, tipo y carpetas. El teléfono se usa para vincular la cuenta una vez; después puedes cerrarlo. Media3 reproduce el contenido desde el servidor, sin PC, Silk, WebView, Google Play Services ni Fling. Requiere API23+ (Fire OS6+); **Vega OS no admite esta APK**.
 
 ## Instalar o actualizar
 
-[APK2.0.0 y firma](https://github.com/oreyes100/JRPlex/releases/tag/firetv-v2.0.0) · [Instalación desde Downloader](https://jrplexps.duckdns.org/firetv). Instala encima de la versión1: mismo paquete `org.jrplex.tv`, misma clave de firma y `versionCode=2`. No hace falta desinstalar.
+[APK2.1.0 y firma](https://github.com/oreyes100/JRPlex/releases/tag/firetv-v2.1.0) · [Instalación desde Downloader](https://jrplexps.duckdns.org/firetv). Instala encima de la versión2.0.0 o anterior: mismo paquete `org.jrplex.tv`, misma clave de firma y `versionCode=3`. No hace falta desinstalar.
 
 ```sh
 adb connect IP_DE_TU_FIRE_TV:5555
-adb install -r jrplex-firetv-2.0.0.apk
+adb install -r jrplex-firetv-2.1.0.apk
 adb shell am start -n org.jrplex.tv/.BrowseActivity
 ```
 

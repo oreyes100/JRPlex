@@ -62,6 +62,10 @@ async function fixture(t, overrides = {}, options = {}) {
       }
       res.writeHead(204); return res.end();
     }
+    if (url.pathname === '/Library/VirtualFolders/LibraryOptions' && req.method === 'POST') {
+      const input = raw ? JSON.parse(raw) : {}; const library = state.libraries.find(l => l.ItemId === input.Id);
+      if (!library) return json({}, 404); library.LibraryOptions = input.LibraryOptions; return json({ ok: true });
+    }
     if (url.pathname === '/Library/Refresh') { res.writeHead(204); return res.end(); }
     return json({ ok: true });
   });
@@ -499,6 +503,17 @@ test('mapping failure restores the previous path and denies viewer or missing-CS
   assert.equal((await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: { Cookie: session.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).status, 403);
   f.state.admin = false;
   assert.equal((await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify(input) })).status, 403);
+});
+
+test('remapping an existing photo Drive library enables Jellyfin photo indexing before the scan', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ ItemId: 'photos', Name: 'Fotos Drive', Locations: ['/media/cloud'], LibraryOptions: { EnablePhotos: false, PathInfos: [{ Path: '/media/cloud' }] } }];
+  const response = await f.request('/api/admin/libraries/photos/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ path: '/media/cloud/Photos', previousPaths: ['/media/cloud'], enablePhotos: true }) });
+  assert.equal(response.status, 200); assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, true);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Photos']);
+  const optionsCall = f.state.requests.find(item => item.path === '/Library/VirtualFolders/LibraryOptions');
+  assert.equal(JSON.parse(optionsCall.body).LibraryOptions.EnablePhotos, true);
+  assert.ok(f.state.requests.some(item => item.path === '/Library/Refresh'));
 });
 
 

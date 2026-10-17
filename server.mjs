@@ -118,6 +118,7 @@ export function createApp(config = loadConfig(), options = {}) {
     if (new RegExp(`^/Users/${id}/(?:Policy|Password)$`).test(path) && method === 'POST') return 'admin';
     if (new RegExp(`^/Users/${id}$`).test(path) && method === 'DELETE') return 'admin';
     if (path === '/Library/VirtualFolders' && ['GET', 'POST', 'DELETE'].includes(method)) return 'admin';
+    if (path === '/Library/VirtualFolders/LibraryOptions' && method === 'POST') return 'admin';
     if (path === '/Library/Refresh' && method === 'POST') return 'admin';
     if (path === '/Users/Me' && method === 'GET') return 'user';
     if (path === '/UserItems/Resume' && ['GET', 'HEAD'].includes(method)) return 'user';

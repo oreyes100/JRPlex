@@ -22,8 +22,11 @@ async function fixture(t) {
   if(url.pathname==='/Users/Me')return json(user);
   if(url.pathname==='/Sessions/Logout'){state.logouts.push(token);state.tokens.delete(token);return json({});}
   if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'library',Name:'Movies',Type:'CollectionFolder',IsFolder:true}]});
-  if(url.pathname.endsWith('/Items')||url.pathname==='/UserItems/Resume')return json({Items:[{Id:'movie',Name:'Fixture movie',Type:'Movie',MediaType:'Video',ImageTags:{Primary:'tag'},UserData:{PlaybackPositionTicks:120000000},Path:'/private/movie'}],TotalRecordCount:85});
-  if(/^\/Users\/[^/]+\/Items\/[^/]+$/.test(url.pathname))return json({Id:url.pathname.split('/').at(-1),Name:'Fixture movie',Type:'Movie',MediaType:'Video'},state.denied?403:200);
+  if(url.pathname.endsWith('/Items')||url.pathname==='/UserItems/Resume'){
+   const photos=url.searchParams.get('IncludeItemTypes')?.includes('Photo');
+   return json({Items:photos?[{Id:'photo',Name:'Fixture photo.jpg',Type:'Photo',MediaType:'Photo',DateCreated:'2024-06-15T12:00:00Z',Path:'/private/photo.jpg'}]:[{Id:'movie',Name:'Fixture movie.mp4',Type:'Movie',MediaType:'Video',ImageTags:{Primary:'tag'},UserData:{PlaybackPositionTicks:120000000},Path:'/private/movie.mp4'},{Id:'subtitle',Name:'Fixture movie.srt',Type:'Movie',MediaType:'Video',MediaStreams:[{Type:'Video'}],Path:'/private/movie.srt'}],TotalRecordCount:85});
+  }
+  if(/^\/Users\/[^/]+\/Items\/[^/]+$/.test(url.pathname))return json({Id:url.pathname.split('/').at(-1),Name:'Fixture movie.mp4',Type:'Movie',MediaType:'Video',Path:'/private/movie.mp4'},state.denied?403:200);
   if(url.pathname==='/Items/movie/PlaybackInfo')return json({MediaSources:[{Id:'source',SupportsDirectPlay:true,Container:'mp4',MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac'}]}]});
   if(url.pathname==='/Videos/movie/stream.mp4'){res.writeHead(200,{'content-type':'video/mp4'});return res.end('verified-fixture-bytes');}
   if(url.pathname.startsWith('/Sessions/Playing'))return json({});
@@ -57,11 +60,17 @@ test('TV enrollment is short lived, one use, credential-specific and independent
 test('TV catalog scopes user, paginates folders/search and cannot invoke admin or access another user',async t=>{
  const f=await fixture(t);const {token}=await f.enroll('bob');
  const home=await(await f.call('/api/tv/catalog',null,token)).json();assert.equal(home.items[0].IsFolder,true);
- const catalogue=await(await f.call('/api/tv/catalog?kind=movies&offset=40&search=test&userId=alice',null,token)).json();assert.equal(catalogue.total,85);assert.equal(catalogue.items[0].Position,12);assert.equal(catalogue.items[0].Path,undefined);
- const last=f.state.requests.at(-1);assert.equal(last.path,'/Users/bob/Items');assert.equal(last.query.get('UserId'),'bob');assert.equal(last.query.get('StartIndex'),'40');
+ const catalogue=await(await f.call('/api/tv/catalog?kind=movies&offset=40&search=test&userId=alice',null,token)).json();assert.equal(catalogue.total,85);assert.equal(catalogue.items[0].Position,12);assert.equal(catalogue.items[0].Path,undefined);assert.deepEqual(catalogue.items.map(item=>item.Id),['movie']);assert.equal(catalogue.items[0].Playable,true);
+ const last=f.state.requests.at(-1);assert.equal(last.path,'/Users/bob/Items');assert.equal(last.query.get('UserId'),'bob');assert.equal(last.query.get('StartIndex'),'40');assert.match(last.query.get('IncludeItemTypes'),/Movie/);assert.match(last.query.get('Fields'),/Path/);
  assert.equal((await f.call('/api/tv/admin',{},token)).status,404);
  assert.equal((await f.call('/api/tv/catalog?offset=-1',null,token)).status,400);
  f.state.denied=true;assert.equal((await f.call('/api/tv/catalog?parent=private',null,token)).status,403);assert.equal((await f.call('/api/tv/play',{itemId:'movie'},token)).status,403);
+});
+test('TV catalog accepts documented sort keys and returns photo dates while refusing subtitle sidecars',async t=>{
+ const f=await fixture(t);const {token}=await f.enroll();
+ const result=await(await f.call('/api/tv/catalog?kind=photos&sort=date&order=desc',null,token)).json();assert.deepEqual(result.items.map(item=>item.Id),['photo']);assert.equal(result.items[0].DateCreated,'2024-06-15T12:00:00Z');
+ const query=f.state.requests.at(-1).query;assert.equal(query.get('SortBy'),'DateCreated,SortName');assert.match(query.get('IncludeItemTypes'),/Photo/);assert.match(query.get('Fields'),/DateCreated/);
+ const sorted=await f.call('/api/tv/catalog?kind=movies&sort=origin',null,token);assert.equal(sorted.status,200);assert.equal(f.state.requests.at(-1).query.get('SortBy'),'IsFolder,SortName');
 });
 test('native standalone play/seek progress/stop and logout revoke only that device',async t=>{
  const f=await fixture(t);const a=await f.enroll();const b=await f.enroll();

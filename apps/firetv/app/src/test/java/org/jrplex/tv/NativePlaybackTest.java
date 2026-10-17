@@ -14,8 +14,13 @@ import static org.junit.Assert.*;
 public class NativePlaybackTest {
     public static class NativeActivity extends ReceiverActivity {
         @Override protected ReceiverApi createApi(String origin) {
-            return (path, input) -> new JSONObject().put("secret", "s".repeat(43)).put("code", "123456")
-                    .put("expiresAt", System.currentTimeMillis() + 300000).put("paired", false).put("commands", new org.json.JSONArray());
+            return new ReceiverApi() {
+                @Override public JSONObject post(String path, JSONObject input) throws Exception {
+                    return new JSONObject().put("secret", "s".repeat(43)).put("code", "123456")
+                            .put("expiresAt", System.currentTimeMillis() + 300000).put("paired", false).put("commands", new org.json.JSONArray());
+                }
+                @Override public byte[] image(String path) { return new byte[0]; }
+            };
         }
     }
     @Test public void constructsAndReleasesNativePlayerOnSupportedAndroidVersions() {

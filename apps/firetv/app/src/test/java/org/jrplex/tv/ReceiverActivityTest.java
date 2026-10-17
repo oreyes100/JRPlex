@@ -36,6 +36,7 @@ public class ReceiverActivityTest {
             if (path.endsWith("/poll")) { reports.add(input); JSONArray next = commands; commands = new JSONArray(); return new JSONObject().put("paired", paired).put("commands", next); }
             return new JSONObject().put("ok", true);
         }
+        @Override public byte[] image(String path) { return new byte[0]; }
         synchronized void command(JSONObject command) { commands.put(command); }
     }
     static class FakePlayer implements Playback {
@@ -50,6 +51,7 @@ public class ReceiverActivityTest {
         @Override public long duration() { return 100000; }
         @Override public boolean paused() { return paused; }
         @Override public String status() { return paused ? "paused" : "playing"; }
+        @Override public String failureReason() { return ""; }
         @Override public void focus() { }
     }
     public static class TestActivity extends ReceiverActivity {
@@ -68,6 +70,13 @@ public class ReceiverActivityTest {
         return new JSONObject().put("sequence", 1).put("command", "play").put("position", 12).put("media", new JSONObject()
                 .put("id", MEDIA).put("url", ReceiverProtocol.DEFAULT_SERVER + "/cast/media/" + MEDIA + "/torrent")
                 .put("contentType", "video/mp4").put("canSeek", seek).put("expiresAt", System.currentTimeMillis() + 300000));
+    }
+    private JSONObject slideshow() throws Exception {
+        return new JSONObject().put("sequence", 1).put("command", "play").put("position", 0).put("media", new JSONObject()
+                .put("id", MEDIA).put("url", ReceiverProtocol.DEFAULT_SERVER + "/cast/media/" + MEDIA + "/slideshow")
+                .put("contentType", "application/x-jrplex-slideshow").put("title", "Fixture photos").put("canSeek", false).put("expiresAt", System.currentTimeMillis() + 300000)
+                .put("photos", new JSONArray().put(new JSONObject().put("name", "One").put("url", ReceiverProtocol.DEFAULT_SERVER + "/cast/media/" + MEDIA + "/photo/photo1"))
+                        .put(new JSONObject().put("name", "Two").put("url", ReceiverProtocol.DEFAULT_SERVER + "/cast/media/" + MEDIA + "/photo/photo2"))));
     }
     @Test public void generatesCodeWithoutLoginAndRemoteButtonHasInitialFocus() throws Exception {
         try (ActivityController<TestActivity> activity = Robolectric.buildActivity(TestActivity.class).setup().visible()) {
@@ -90,6 +99,20 @@ public class ReceiverActivityTest {
             assertEquals(1, view.fixture.reports.get(view.fixture.reports.size() - 1).getLong("ack"));
             activity.pause().stop(); until(() -> view.fixture.requests.contains("/cast/receiver/end"));
             assertTrue(view.player.paused);
+        }
+    }
+    @Test public void photoSlideshowsPlayOnFireTvPauseWithTheRemoteAndReportState() throws Exception {
+        try (ActivityController<TestActivity> activity = Robolectric.buildActivity(TestActivity.class).setup()) {
+            TestActivity view = activity.get(); until(() -> !view.fixture.reports.isEmpty()); view.fixture.paired = true;
+            view.fixture.command(slideshow()); tick(); until(() -> ((TextView) view.findViewById(ReceiverActivity.STATUS_ID)).getText().toString().contains("Presentación"));
+            assertEquals(0, view.player.loads);
+            view.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+            assertTrue(((TextView) view.findViewById(ReceiverActivity.STATUS_ID)).getText().toString().contains("pausa"));
+            view.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY));
+            tick();
+            until(() -> view.fixture.reports.stream().anyMatch(report -> report.optJSONObject("state") != null && report.optJSONObject("state").optString("status").equals("playing")));
+            assertTrue(view.fixture.reports.stream().anyMatch(report -> report.optJSONObject("state") != null && report.optJSONObject("state").optString("status").equals("playing")));
+            activity.pause().stop(); until(() -> view.fixture.requests.contains("/cast/receiver/end"));
         }
     }
     @Test public void convertedTorrentCannotSeekAndForegroundReturnCreatesNewPairing() throws Exception {

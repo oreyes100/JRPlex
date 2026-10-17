@@ -18,6 +18,7 @@ interface Playback {
     void load(ReceiverProtocol.Media media);
     void pause(); void resume(); void seek(long position); void clear(); void release();
     long position(); long duration(); boolean paused(); String status();
+    String failureReason();
     void focus();
 
     @UnstableApi
@@ -27,6 +28,7 @@ interface Playback {
         private final MediaSession session;
         private boolean failed;
         private boolean canSeek;
+        private String failureReason = "";
         Native(Activity activity, ViewGroup parent, Runnable changed) {
             player = new ExoPlayer.Builder(activity).build();
             player.setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
@@ -39,11 +41,11 @@ interface Playback {
             parent.addView(view, new ViewGroup.LayoutParams(-1, -1));
             player.addListener(new Player.Listener() {
                 @Override public void onEvents(Player value, Player.Events events) { changed.run(); }
-                @Override public void onPlayerError(PlaybackException error) { failed = true; changed.run(); }
+                @Override public void onPlayerError(PlaybackException error) { failed = true; failureReason = error.getErrorCodeName(); changed.run(); }
             });
         }
         @Override public void load(ReceiverProtocol.Media media) {
-            failed = false; canSeek = media.canSeek;
+            failed = false; failureReason = ""; canSeek = media.canSeek;
             view.setShowFastForwardButton(canSeek); view.setShowRewindButton(canSeek);
             view.setVisibility(View.VISIBLE);
             MediaItem item = new MediaItem.Builder().setUri(media.url).setMimeType(media.type)
@@ -65,6 +67,7 @@ interface Playback {
             if (player.getPlaybackState() == Player.STATE_BUFFERING || player.getPlaybackState() == Player.STATE_IDLE) return "buffering";
             return "paused";
         }
+        @Override public String failureReason() { return failureReason; }
         @Override public void focus() { view.requestFocus(); view.showController(); }
     }
 }

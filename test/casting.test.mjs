@@ -15,7 +15,8 @@ async function fixture(t) {
     if (url.pathname === '/Users/AuthenticateByName') { const name = JSON.parse(raw).Username; return json({ AccessToken: `${name}_PRIVATE_TOKEN`, User: user(name) }); }
     const name = req.headers.authorization?.includes('bob_PRIVATE_TOKEN') ? 'bob' : 'alice';
     if (url.pathname === '/Users/Me') return json(user(name));
-    if (/^\/Users\/(alice|bob)\/Items\/[A-Za-z0-9_-]+$/.test(url.pathname)) return json({ Id: url.pathname.split('/').at(-1), Name: 'Synthetic film', Type: 'Movie', MediaType: 'Video' }, state.denied ? 404 : 200);
+    if (/^\/Users\/(alice|bob)\/Items$/.test(url.pathname) && url.searchParams.has('Ids')) return json({ Items: url.searchParams.get('Ids').split(',').map(id => id.startsWith('photo') ? ({ Id: id, Name: `${id}.jpg`, Type: 'Photo', MediaType: 'Photo' }) : ({ Id: id, Name: `${id}.mp4`, Type: 'Movie', MediaType: 'Video' })) });
+    if (/^\/Users\/(alice|bob)\/Items\/[A-Za-z0-9_-]+$/.test(url.pathname)) { const id = url.pathname.split('/').at(-1); return json(id === 'sidecar' ? { Id: id, Name: 'Synthetic film.srt', Type: 'Movie', MediaType: 'Video', MediaStreams: [{ Type: 'Video' }] } : { Id: id, Name: 'Synthetic film.mp4', Type: 'Movie', MediaType: 'Video', MediaStreams: [{ Type: 'Video', Codec: 'h264' }] }, state.denied ? 404 : 200); }
     if (/^\/Items\/[A-Za-z0-9_-]+\/PlaybackInfo$/.test(url.pathname)) return json({ PlaySessionId: 'play_session', MediaSources: [{ Id: 'source', SupportsDirectPlay: !state.hls && !state.external, Container: 'mp4', MediaStreams: [{ Type: 'Video', Codec: 'h264', BitDepth: 8, Level: 40 }, { Type: 'Audio', Codec: 'aac' }], TranscodingUrl: state.external ? 'https://evil.invalid/movie.m3u8?api_key=PRIVATE' : `/videos/${state.transcodeId || url.pathname.split('/')[2]}/master.m3u8?api_key=PRIVATE&MediaSourceId=source` }] });
     if (/^\/Videos\/[A-Za-z0-9_-]+\/master.m3u8$/.test(url.pathname)) { res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' }); return res.end('#EXTM3U\n#EXT-X-MAP:URI="init.mp4?api_key=PRIVATE"\n#EXT-X-KEY:METHOD=AES-128,URI="key?AccessToken=PRIVATE"\nchild/segment.ts\n'); }
     if (/^\/Videos\/[A-Za-z0-9_-]+\/child\/segment.ts$/.test(url.pathname)) { res.writeHead(200, { 'content-type': 'video/mp2t' }); return res.end('segment'); }
@@ -23,6 +24,7 @@ async function fixture(t) {
       if (state.slow) { res.writeHead(200, { 'content-type': 'video/mp4' }); res.write('first-frame'); return; }
       const partial = !!req.headers.range; res.writeHead(partial ? 206 : 200, { 'content-type': 'video/mp4', 'content-length': partial ? 4 : 8, 'accept-ranges': 'bytes', ...(partial ? { 'content-range': 'bytes 2-5/8' } : {}) }); return res.end(req.method === 'HEAD' ? undefined : partial ? '2345' : '01234567');
     }
+    if (/^\/Items\/photo[0-9]+\/Images\/Primary$/.test(url.pathname)) { res.writeHead(200, { 'content-type': 'image/jpeg' }); return res.end('JPEG-fixture'); }
     if (url.pathname === '/Sessions/Logout') { res.writeHead(204); return res.end(); }
     return json({}, 404);
   });
@@ -54,6 +56,25 @@ test('cast capability serves only its authorized item without cookies, supports 
   assert.equal((await f.request(media.url.replace('/Videos/movie/', '/Videos/other/'))).status, 403);
   assert.equal((await f.request(media.url.replace('/jellyfin/Videos/movie/stream.mp4', '/jellyfin/Users'))).status, 403);
   await f.call(session, '/api/logout'); assert.equal((await f.request(media.url)).status, 401);
+});
+
+test('the cast endpoint rejects subtitle sidecars even when stale metadata marks them as video', async t => {
+  const f = await fixture(t); const session = await f.login();
+  const response = await f.call(session, '/api/cast/media', { kind: 'library', itemId: 'sidecar' });
+  assert.equal(response.status, 415);
+  assert.match((await response.json()).error, /no es un vídeo o audio reproducible/i);
+});
+
+test('photo slideshow grants expose only selected, user-accessible photo URLs and revoke with the receiver', async t => {
+  const f = await fixture(t); const session = await f.login();
+  const started = await (await f.receiverCall('/cast/receiver/start', { name: 'Living room' })).json();
+  const receiver = await (await f.call(session, '/api/cast/pair', { code: started.code })).json();
+  const sent = await f.call(session, `/api/cast/receivers/${receiver.id}/play`, { kind: 'slideshow', itemIds: ['photo1', 'photo2'] }); assert.equal(sent.status, 200);
+  const { media } = await sent.json(); assert.equal(media.contentType, 'application/x-jrplex-slideshow'); assert.equal(media.photos.length, 2);
+  assert.equal((await f.request(media.photos[0].url)).status, 200); assert.equal(await (await f.request(media.photos[0].url)).text(), 'JPEG-fixture');
+  assert.equal((await f.request(media.photos[0].url.replace('/photo/photo1', '/photo/photo3'))).status, 403);
+  assert.equal((await f.call(session, `/api/cast/receivers/${receiver.id}/play`, { kind: 'slideshow', itemIds: ['movie'] })).status, 400);
+  await f.receiverCall('/cast/receiver/end', { secret: started.secret }); assert.equal((await f.request(media.photos[0].url)).status, 401);
 });
 
 test('HLS children, init and key URIs keep the scoped capability and upstream credentials remain hidden', async t => {
@@ -127,7 +148,7 @@ test('expired codes and receiver secrets are rejected and pairing guesses are bo
 test('native TV ending a receiver requires its secret and same origin, and revokes only its media and pairing', async t => {
   const f = await fixture(t); const owner = await f.login();
   const installer = await f.request('/firetv'); assert.equal(installer.status, 200);
-  const page = await installer.text(); assert.match(page, /jrplex-firetv-2\.0\.0\.apk/); assert.match(page, /Vega OS/);
+  const page = await installer.text(); assert.match(page, /jrplex-firetv-2\.1\.0\.apk/); assert.match(page, /Vega OS/);
   assert.match(installer.headers.get('content-security-policy'), /default-src 'none'/);
   const started = await (await f.receiverCall('/cast/receiver/start', { name: 'JRPlex Fire TV' })).json();
   const receiver = await (await f.call(owner, '/api/cast/pair', { code: started.code })).json();

@@ -2,6 +2,7 @@ package org.jrplex.tv;
 
 import android.app.AlertDialog;
 import android.graphics.Color;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
@@ -14,6 +15,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.media3.common.util.UnstableApi;
@@ -24,6 +26,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.ArrayList;
 
 /** A foreground, credential-free receiver; no account login or WebView. */
 @UnstableApi
@@ -31,6 +34,7 @@ public class ReceiverActivity extends AppCompatActivity {
     static final int CODE_ID = 1001, STATUS_ID = 1002, RENEW_ID = 1003, SERVER_ID = 1004;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService photoLoader = Executors.newSingleThreadExecutor();
     private volatile int generation;
     private volatile boolean foreground;
     private boolean paired;
@@ -38,6 +42,9 @@ public class ReceiverActivity extends AppCompatActivity {
     private int failures;
     private String server, secret, mediaId;
     private boolean canSeek;
+    private boolean photosPaused;
+    private int photoIndex;
+    private ArrayList<ReceiverProtocol.Photo> photoShow;
     private String playbackError;
     private ReceiverApi api;
     private Playback player;
@@ -45,6 +52,8 @@ public class ReceiverActivity extends AppCompatActivity {
     private LinearLayout pairing;
     private TextView code, status, address, expiry;
     private Button renew;
+    private ImageView photoView;
+    private final Runnable photoStep = new Runnable() { @Override public void run() { if (mediaId == null || photoShow == null || photosPaused) return; photoIndex = (photoIndex + 1) % photoShow.size(); showPhoto(photoIndex); handler.postDelayed(this, 4000); } };
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -56,6 +65,7 @@ public class ReceiverActivity extends AppCompatActivity {
         server = ReceiverProtocol.origin(getIntent().getStringExtra("server") != null ? getIntent().getStringExtra("server") : getPreferences(MODE_PRIVATE).getString("server", ReceiverProtocol.DEFAULT_SERVER));
         root = new FrameLayout(this); root.setBackgroundColor(Color.rgb(16, 20, 24)); setContentView(root);
         player = createPlayback(root);
+        photoView = new ImageView(this); photoView.setBackgroundColor(Color.BLACK); photoView.setScaleType(ImageView.ScaleType.FIT_CENTER); photoView.setVisibility(View.GONE); root.addView(photoView, new FrameLayout.LayoutParams(-1, -1));
         pairing = new LinearLayout(this); pairing.setOrientation(LinearLayout.VERTICAL); pairing.setGravity(Gravity.CENTER);
         pairing.setPadding(dp(48), dp(20), dp(48), dp(58));
         root.addView(pairing, new FrameLayout.LayoutParams(-1, -1));
@@ -89,9 +99,9 @@ public class ReceiverActivity extends AppCompatActivity {
     @Override public void onStart() { super.onStart(); foreground = true; begin(); }
     @Override public void onStop() {
         foreground = false; ++generation; handler.removeCallbacksAndMessages(null); end();
-        mediaId = null; player.clear(); super.onStop();
+        mediaId = null; stopPhotoShow(); player.clear(); super.onStop();
     }
-    @Override public void onDestroy() { player.release(); io.shutdown(); super.onDestroy(); }
+    @Override public void onDestroy() { player.release(); io.shutdown(); photoLoader.shutdownNow(); super.onDestroy(); }
     private void end() {
         String previous = secret; secret = null;
         ReceiverApi previousApi = api;
@@ -105,7 +115,7 @@ public class ReceiverActivity extends AppCompatActivity {
     private void begin() {
         if (!foreground) return;
         int run = ++generation; handler.removeCallbacksAndMessages(null); end();
-        player.clear(); mediaId = null; playbackError = null; ack = 0; paired = false; failures = 0;
+        stopPhotoShow(); player.clear(); mediaId = null; playbackError = null; ack = 0; paired = false; failures = 0;
         pairing.setVisibility(View.VISIBLE); code.setText("······"); code.setTextSize(58); expiry.setText("El código se renueva automáticamente al caducar.");
         status.setText("Conectando con JRPlex…"); renew.setEnabled(false); renew.requestFocus();
         api = createApi(server); start(run);
@@ -139,6 +149,8 @@ public class ReceiverActivity extends AppCompatActivity {
         });
     }
     private JSONObject state() throws JSONException {
+        if (photoShow != null && mediaId != null) return new JSONObject().put("mediaId", mediaId).put("status", photosPaused ? "paused" : "playing")
+                .put("position", photoIndex * 4).put("duration", photoShow.size() * 4).put("paused", photosPaused);
         return new JSONObject().put("mediaId", mediaId == null ? JSONObject.NULL : mediaId)
                 .put("status", mediaId == null ? "ready" : playbackError != null ? "error" : player.status())
                 .put("position", ReceiverProtocol.reportSeconds(player.position()))
@@ -175,12 +187,16 @@ public class ReceiverActivity extends AppCompatActivity {
                 ReceiverProtocol.Media media = ReceiverProtocol.media(server, command, now());
                 mediaId = media.id; canSeek = media.canSeek; playbackError = null;
                 pairing.setVisibility(View.GONE); status.setVisibility(View.VISIBLE);
-                status.setText("Preparando " + media.title + "…"); player.load(media); break;
-            case "pause": player.pause(); break;
-            case "resume": if (mediaId != null) player.resume(); break;
-            case "seek": if (mediaId != null && canSeek) player.seek((long) (ReceiverProtocol.seconds(command.getDouble("position")) * 1000)); break;
+                if (media.photos != null) {
+                    player.clear(); photoShow = media.photos; photoIndex = 0; photosPaused = false; photoView.setVisibility(View.VISIBLE);
+                    status.setText("Preparando presentación de " + photoShow.size() + " fotos…"); showPhoto(0); handler.removeCallbacks(photoStep); handler.postDelayed(photoStep, 4000);
+                } else { stopPhotoShow(); status.setText("Preparando " + media.title + "…"); player.load(media); }
+                break;
+            case "pause": if (photoShow != null) { photosPaused = true; handler.removeCallbacks(photoStep); playbackChanged(); } else player.pause(); break;
+            case "resume": if (mediaId != null) { if (photoShow != null) { photosPaused = false; handler.removeCallbacks(photoStep); handler.postDelayed(photoStep, 4000); playbackChanged(); } else player.resume(); } break;
+            case "seek": if (mediaId != null && photoShow != null) { photoIndex = Math.min(photoShow.size() - 1, (int) (ReceiverProtocol.seconds(command.getDouble("position")) / 4)); showPhoto(photoIndex); } else if (mediaId != null && canSeek) player.seek((long) (ReceiverProtocol.seconds(command.getDouble("position")) * 1000)); break;
             case "stop":
-                mediaId = null; playbackError = null; player.clear(); pairing.setVisibility(View.VISIBLE);
+                mediaId = null; playbackError = null; stopPhotoShow(); player.clear(); pairing.setVisibility(View.VISIBLE);
                 status.setVisibility(View.VISIBLE); status.setText("Pantalla vinculada. Puedes enviar otro vídeo."); renew.requestFocus(); break;
             default: throw new IllegalArgumentException("Control no válido.");
         }
@@ -198,6 +214,9 @@ public class ReceiverActivity extends AppCompatActivity {
     }
     private void playbackChanged() {
         if (status == null || mediaId == null) return;
+        if (photoShow != null) {
+            status.setVisibility(View.VISIBLE); status.setText(photosPaused ? "Presentación en pausa · pulsa ▶/Ⅱ para continuar" : "Presentación · " + (photoIndex + 1) + " de " + photoShow.size() + " · pulsa Atrás para detener"); return;
+        }
         String current = playbackError != null ? "error" : player.status();
         if (current.equals("playing")) status.setVisibility(View.GONE);
         else {
@@ -207,6 +226,16 @@ public class ReceiverActivity extends AppCompatActivity {
                     : current.equals("paused") ? "En pausa · pulsa ▶/Ⅱ para continuar" : "Cargando vídeo…");
         }
     }
+    private void showPhoto(int index) {
+        if (photoShow == null || index < 0 || index >= photoShow.size()) return;
+        ReceiverProtocol.Photo photo = photoShow.get(index); int run = generation;
+        try {
+            String path = java.net.URI.create(photo.url).getRawPath();
+            photoLoader.execute(() -> { try { byte[] data = api.image(path); android.graphics.Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length); handler.post(() -> { if (run == generation && mediaId != null && photoShow != null && index == photoIndex) { photoView.setImageBitmap(bitmap); photoView.setContentDescription(photo.name); playbackChanged(); } }); }
+                catch (Exception error) { handler.post(() -> { if (run == generation && mediaId != null) { playbackError = "No se pudo cargar una fotografía. Comprueba la conexión de la TV."; status.setText(playbackError); } }); } });
+        } catch (Exception error) { playbackError = "La ruta de la fotografía no es válida."; status.setText(playbackError); }
+    }
+    private void stopPhotoShow() { handler.removeCallbacks(photoStep); photoShow = null; photosPaused = false; photoView.setImageDrawable(null); photoView.setVisibility(View.GONE); }
     private void configure() {
         EditText input = new EditText(this); input.setText(server); input.setSingleLine(); input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         input.setPadding(dp(24), dp(12), dp(24), dp(12));
@@ -224,8 +253,8 @@ public class ReceiverActivity extends AppCompatActivity {
             android.widget.ScrollView scroll = new android.widget.ScrollView(this);
             TextView text = new TextView(this); text.setTextSize(15); text.setPadding(dp(24), dp(12), dp(24), dp(12));
             text.setText(new String(readAsset(notice), java.nio.charset.StandardCharsets.UTF_8) + "\n\n" + new String(readAsset(license), java.nio.charset.StandardCharsets.UTF_8));
-            scroll.addView(text); new AlertDialog.Builder(this).setTitle("JRPlex TV 2.0.0 · Licencias").setView(scroll).setPositiveButton("Cerrar", null).show();
-        } catch (java.io.IOException error) { status.setText("JRPlex TV 2.0.0 · github.com/oreyes100/JRPlex"); }
+            scroll.addView(text); new AlertDialog.Builder(this).setTitle("JRPlex TV 2.1.0 · Licencias").setView(scroll).setPositiveButton("Cerrar", null).show();
+        } catch (java.io.IOException error) { status.setText("JRPlex TV 2.1.0 · github.com/oreyes100/JRPlex"); }
     }
     private byte[] readAsset(java.io.InputStream stream) throws java.io.IOException {
         java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(); byte[] part = new byte[4096]; int count;
@@ -235,9 +264,14 @@ public class ReceiverActivity extends AppCompatActivity {
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         if (mediaId != null) {
             int key = event.getKeyCode();
+            if (photoShow != null && event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                if (key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) { photoIndex = (photoIndex + 1) % photoShow.size(); showPhoto(photoIndex); return true; }
+                if (key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND) { photoIndex = (photoIndex - 1 + photoShow.size()) % photoShow.size(); showPhoto(photoIndex); return true; }
+            }
             if (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || key == KeyEvent.KEYCODE_MEDIA_PLAY || key == KeyEvent.KEYCODE_MEDIA_PAUSE) {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                    if (key == KeyEvent.KEYCODE_MEDIA_PAUSE || (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !player.paused())) player.pause(); else player.resume();
+                    if (photoShow != null) { if (key == KeyEvent.KEYCODE_MEDIA_PAUSE || (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !photosPaused)) { photosPaused = true; handler.removeCallbacks(photoStep); } else { photosPaused = false; handler.removeCallbacks(photoStep); handler.postDelayed(photoStep, 4000); } playbackChanged(); }
+                    else if (key == KeyEvent.KEYCODE_MEDIA_PAUSE || (key == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && !player.paused())) player.pause(); else player.resume();
                 } return true;
             }
             if (key == KeyEvent.KEYCODE_MEDIA_REWIND || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {

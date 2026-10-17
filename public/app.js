@@ -5,7 +5,7 @@ import { createCastControls } from './casting-sender.js';
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null };
+  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name' };
   const cloudReturn = new URLSearchParams(window.location.search).get('cloud');
   if (['google-linked', 'google-error', 'google-cancelled'].includes(cloudReturn)) window.history.replaceState(null, '', window.location.pathname);
   let toastTimer; let playIntent = 0;
@@ -71,11 +71,12 @@ import { createCastControls } from './casting-sender.js';
     if (!route.startsWith('/') || route.startsWith('//')) throw new Error('Ruta de servidor inválida.');
     const mutates = !['GET', 'HEAD'].includes(method);
     let response;
+    const requestSignal = signal || AbortSignal.timeout(45000);
     try {
-      response = await fetch(route, { method, credentials: 'same-origin', redirect: 'error', signal, keepalive,
+      response = await fetch(route, { method, credentials: 'same-origin', redirect: 'error', signal: requestSignal, keepalive,
         headers: { Accept: 'application/json', ...(mutates ? { 'Content-Type': 'application/json', ...(state.session?.csrfToken ? { 'X-CSRF-Token': state.session.csrfToken } : {}) } : {}) },
         ...(mutates ? { body: JSON.stringify(body ?? {}) } : {}) });
-    } catch { throw new Error('No se puede conectar con el servidor. Revisa la conexión e inténtalo otra vez.'); }
+    } catch (cause) { throw new Error(cause?.name === 'TimeoutError' || cause?.name === 'AbortError' ? 'La biblioteca tardó demasiado en responder. Revisa el montaje de Drive o la red y vuelve a intentarlo.' : 'No se puede conectar con el servidor. Revisa la conexión e inténtalo otra vez.'); }
     if (response.status === 401) { showLogin('La sesión ha terminado. Vuelve a entrar.'); const error = new Error('Sesión terminada.'); error.status = 401; throw error; }
     if (!response.ok) {
       const messages = { 400: 'Revisa los datos introducidos.', 403: 'No tienes permiso para esta acción o el servidor rechazó la solicitud.', 404: 'El elemento ya no está disponible.', 409: 'Este enlace ya está agregado al servicio de torrents y JRPlex no modificó esa descarga. Si ya aparece en JRPlex, abre su sesión activa.', 413: 'El archivo supera el tamaño permitido.', 429: 'Se han realizado demasiados intentos. Espera un momento.', 502: 'El servidor multimedia o qBittorrent no está disponible.', 503: 'Este servicio todavía no está configurado o no está disponible.', 504: 'El torrent no entregó metadatos o piezas a tiempo. Comprueba que tenga pares activos e inténtalo de nuevo.' };
@@ -168,7 +169,7 @@ import { createCastControls } from './casting-sender.js';
       content.append(list);
     };
     const browse = async (library, parentId = library.Id, stack = [], search = '', startIndex = 0, target = content) => {
-      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '100', StartIndex: String(startIndex), SortBy: 'SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio,Photo,PhotoAlbum', Fields: 'Overview,Genres,MediaSources,MediaStreams', EnableUserData: 'true' });
+      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '100', StartIndex: String(startIndex), SortBy: 'IsFolder,SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio,Photo,PhotoAlbum', Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
       if (search) query.set('SearchTerm', search);
       const page = await api(`/jellyfin/Users/${userId}/Items?${query}`);
       if (generation !== state.generation) return;
@@ -211,7 +212,8 @@ import { createCastControls } from './casting-sender.js';
 
   async function renderCatalogue(generation) {
     const names = { home: 'Tu biblioteca', movies: 'Películas', series: 'Series', music: 'Música', favorites: 'Favoritos' };
-    const query = new URLSearchParams({ Recursive: 'true', Limit: '100', StartIndex: '0', SortBy: 'SortName', SortOrder: 'Ascending', Fields: 'Overview,Genres,MediaSources,MediaStreams,Path', EnableUserData: 'true' });
+    const orderBy = state.catalogueSort === 'origin' ? 'IsFolder,SortName' : 'SortName,Name';
+    const query = new URLSearchParams({ Recursive: 'true', Limit: '80', StartIndex: '0', SortBy: orderBy, SortOrder: 'Ascending', Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
     if (state.view === 'favorites') query.set('IsFavorite', 'true');
     else query.set('IncludeItemTypes', { home: 'Movie,Series,MusicAlbum,Audio,Video,Episode', movies: 'Movie,Video,Episode', series: 'Series', music: 'MusicAlbum,Audio' }[state.view] || 'Movie,Series,Audio');
     // Album containers have no MediaType. Filter by item type so both albums
@@ -219,7 +221,7 @@ import { createCastControls } from './casting-sender.js';
 
     if (state.view === 'movies') query.set('MediaTypes', 'Video');
     if (state.search) query.set('SearchTerm', state.search);
-    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`), state.view === 'home' && !state.search ? api('/jellyfin/UserItems/Resume?Limit=12&MediaTypes=Video&Fields=Overview,MediaSources,MediaStreams').catch(() => null) : Promise.resolve(null)]);
+    const [catalogue, resumable] = await Promise.all([api(`/jellyfin/Items?${query}`), state.view === 'home' && !state.search ? api('/jellyfin/UserItems/Resume?Limit=12&MediaTypes=Video&Fields=Overview').catch(() => null) : Promise.resolve(null)]);
     if (generation !== state.generation || !state.session) return;
     if (!Array.isArray(catalogue?.Items)) throw new Error('El catálogo recibido no es válido.');
     const content = $('content'); content.replaceChildren();
@@ -227,13 +229,23 @@ import { createCastControls } from './casting-sender.js';
     const visibleResumable = (resumable?.Items || []).filter(isDisplayableItem);
     if (state.view === 'home' && !state.search) content.append(hero(visibleItems.find(isDisplayableItem)));
     else content.append(title(state.search ? `Resultados de «${state.search}»` : names[state.view], state.view === 'favorites' ? 'Los títulos que quieres tener cerca.' : 'Tu colección personal, lista para descubrir.'));
+    const sort = el('select', { 'aria-label': 'Organizar biblioteca' },
+      el('option', { value: 'name' }, 'Ordenar por nombre'),
+      el('option', { value: 'type' }, 'Ordenar por tipo'),
+      el('option', { value: 'origin' }, 'Explorar por carpeta'));
+    sort.value = state.catalogueSort;
+    sort.addEventListener('change', () => { if (sort.value === 'origin') { void navigate('folders'); return; } state.catalogueSort = sort.value; void navigate(state.view); });
+    content.append(el('label', { class: 'library-sort' }, 'Organizar: ', sort));
     if (visibleResumable.length) content.append(heading('Continúa donde lo dejaste'), el('div', { class: 'card-grid' }, visibleResumable.map(card)));
     const listHeading = heading(state.search ? 'Encontrado en tu biblioteca' : names[state.view]);
     const grid = el('div', { class: 'card-grid' }); content.append(listHeading, grid);
     let playableCount = 0;
     let emptyNotice = null;
     const appendItems = items => {
-      const visible = items.filter(isCatalogItem); playableCount += visible.length;
+      const visible = items.filter(isCatalogItem).sort((a, b) => state.catalogueSort === 'type'
+        ? String(a.Type || a.MediaType || '').localeCompare(String(b.Type || b.MediaType || ''), 'es') || String(a.Name || '').localeCompare(String(b.Name || ''), 'es')
+        : state.catalogueSort === 'origin' ? Number(!!b.IsFolder) - Number(!!a.IsFolder) || String(a.Name || '').localeCompare(String(b.Name || ''), 'es')
+          : 0); playableCount += visible.length;
       grid.append(...visible.map(card));
       listHeading.querySelector('small').textContent = `${playableCount} reproducibles`;
       if (visible.length) emptyNotice?.remove();
@@ -261,7 +273,7 @@ import { createCastControls } from './casting-sender.js';
     const result = await api(`/jellyfin/Users/${userId}/Views`);
     if (generation !== state.generation) return;
     const available = (result?.Items || []).filter(view => validId(view?.Id));
-    const preferred = available.filter(view => ['photos', 'homevideos'].includes(String(view.CollectionType || '').toLowerCase()));
+    const preferred = available.filter(view => ['photos', 'homevideos'].includes(String(view.CollectionType || '').toLowerCase()) || /foto|photo|imagen|image/i.test(view.Name || ''));
     const libraries = [...preferred, ...available.filter(view => !preferred.includes(view))];
     const content = $('content');
     if (!libraries.length) {
@@ -298,32 +310,85 @@ import { createCastControls } from './casting-sender.js';
       crumbs.append(button(folder.name, () => renderPhotoFolder(library, folder.id, stack.slice(0, index + 1), generation, libraries), 'small-button'));
     });
     content.append(crumbs);
+    const grouping = el('select', { 'aria-label': 'Agrupar fotografías' },
+      el('option', { value: 'day' }, 'Galerías por día'), el('option', { value: 'month' }, 'Galerías por mes'), el('option', { value: 'year' }, 'Galerías por año'), el('option', { value: 'folder' }, 'Carpetas'));
     const grid = el('div', { class: 'photo-grid' });
     const more = el('button', { type: 'button', class: 'secondary load-more', hidden: true }, 'Cargar más fotos');
     const count = el('p', { class: 'photo-count', role: 'status' });
-    content.append(grid, count, more);
-    const context = { library, parentId: folderId || library.Id, stack, libraries, generation, grid, more, count, cursor: 0, total: 0, items: [], photoIndex: 0, loading: false };
+    content.append(el('label', { class: 'library-sort' }, 'Organizar: ', grouping), grid, count, more);
+    const context = { library, parentId: folderId || library.Id, stack, libraries, generation, grid, more, count, cursor: 0, total: 0, items: [], folders: [], photoIndex: 0, loading: false, grouping: 'day' };
     state.photos = context;
+    content.insertBefore(photoCastPanel(context), grid);
+    grouping.addEventListener('change', () => { context.grouping = grouping.value; context.cursor = 0; context.total = 0; context.items = []; context.folders = []; renderPhotoGrid(context); void busy(more, () => loadPhotoPage(context)); });
     more.addEventListener('click', () => void busy(more, () => loadPhotoPage(context)));
     await loadPhotoPage(context);
+  }
+  function photoGroupLabel(item, grouping) {
+    const date = new Date(item.DateCreated || '');
+    if (!Number.isFinite(date.getTime())) return 'Fecha no disponible';
+    const year = new Intl.DateTimeFormat('es-MX', { year: 'numeric' }).format(date);
+    if (grouping === 'year') return year;
+    const month = new Intl.DateTimeFormat('es-MX', { month: 'long' }).format(date);
+    if (grouping === 'month') return `${month} de ${year}`;
+    return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+  }
+  function photoCastPanel(context) {
+    const screens = el('select', { 'aria-label': 'Pantalla vinculada' }, el('option', { value: '' }, 'Elige una pantalla Fire TV'));
+    const code = el('input', { type: 'text', inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}', placeholder: 'Código de la TV', 'aria-label': 'Código de la TV' });
+    const status = el('p', { class: 'note', role: 'status' }, 'Vincula la app JRPlex TV del Fire TV y envía las fotografías cargadas de esta carpeta.');
+    const send = el('button', { type: 'button', class: 'primary' }, 'Transmitir presentación');
+    const refresh = el('button', { type: 'button', class: 'small-button' }, 'Actualizar pantallas');
+    const pair = el('button', { type: 'button', class: 'small-button' }, 'Vincular código');
+    const controls = el('div', { class: 'photo-cast-controls' }, screens, refresh, el('label', {}, 'Código de Fire TV ', code), pair, send, status);
+    const refreshScreens = async () => {
+      const chosen = screens.value; const result = await api('/api/cast/receivers');
+      screens.replaceChildren(el('option', { value: '' }, result.receivers.length ? 'Elige una pantalla Fire TV' : 'No hay pantallas vinculadas'));
+      for (const receiver of result.receivers) screens.append(el('option', { value: receiver.id }, receiver.name));
+      if (result.receivers.some(receiver => receiver.id === chosen)) screens.value = chosen;
+    };
+    const transmit = async receiverId => {
+      if (!validId(receiverId)) throw new Error('Elige una pantalla o vincúlala con el código mostrado en Fire TV.');
+      if (!context.items.length) throw new Error('Esta carpeta todavía no contiene fotografías cargadas.');
+      const items = context.items.slice(0, 100);
+      await api(`/api/cast/receivers/${receiverId}/play`, { method: 'POST', body: { kind: 'slideshow', itemIds: items.map(item => item.Id), position: 0 } });
+      status.textContent = `Presentación enviada a la TV · ${items.length} fotografías.${context.items.length > 100 ? ' Se enviaron las primeras 100; carga o elige una carpeta más pequeña para transmitir el resto.' : ''}`;
+    };
+    refresh.addEventListener('click', () => void busy(refresh, async () => { await refreshScreens(); status.textContent = 'Pantallas vinculadas actualizadas.'; }));
+    pair.addEventListener('click', () => void busy(pair, async () => {
+      const value = code.value.trim(); if (!/^\d{6}$/.test(value)) throw new Error('Introduce el código de seis dígitos que muestra la app JRPlex TV.');
+      const receiver = await api('/api/cast/pair', { method: 'POST', body: { code: value } }); code.value = ''; await transmit(receiver.id);
+    }));
+    send.addEventListener('click', () => void busy(send, () => transmit(screens.value)));
+    void refreshScreens().catch(error => { status.textContent = error.message; });
+    return controls;
+  }
+  function renderPhotoGrid(context) {
+    context.grid.replaceChildren();
+    for (const folder of context.folders) context.grid.append(el('button', { type: 'button', class: 'photo-folder', onclick: () => void busy(null, () => renderPhotoFolder(context.library, folder.Id, [...context.stack, { id: folder.Id, name: folder.Name || 'Carpeta' }], context.generation, context.libraries)) }, el('span', { 'aria-hidden': 'true' }, '▰'), el('span', {}, folder.Name || 'Carpeta')));
+    let previousGroup = null;
+    context.items.forEach((item, index) => {
+      if (context.grouping !== 'folder') {
+        const group = photoGroupLabel(item, context.grouping);
+        if (group !== previousGroup) { const label = el('div', { class: 'section-heading', style: 'grid-column:1/-1' }, el('h2', {}, group)); context.grid.append(label); previousGroup = group; }
+      }
+      context.grid.append(photoCard(item, index));
+    });
   }
   async function loadPhotoPage(context) {
     if (context.loading || state.photos !== context || context.generation !== state.generation) return;
     context.loading = true; context.more.disabled = true; context.more.hidden = false; context.more.textContent = 'Cargando…';
     try {
-      const query = new URLSearchParams({ ParentId: context.parentId, Recursive: 'false', Limit: '150', StartIndex: String(context.cursor), SortBy: 'SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Photo,PhotoAlbum,Folder', Fields: 'Path', EnableUserData: 'false' });
+      const query = new URLSearchParams({ ParentId: context.parentId, Recursive: 'false', Limit: '100', StartIndex: String(context.cursor), SortBy: context.grouping === 'folder' ? 'SortName' : 'DateCreated,SortName', SortOrder: context.grouping === 'folder' ? 'Ascending' : 'Descending', IncludeItemTypes: 'Photo,PhotoAlbum,Folder', Fields: 'Path,DateCreated', EnableUserData: 'false' });
       const result = await api(`/jellyfin/Users/${state.session.user.Id}/Items?${query}`);
       if (state.photos !== context || context.generation !== state.generation) return;
       const rows = Array.isArray(result?.Items) ? result.Items : [];
       context.cursor += rows.length; context.total = Number(result?.TotalRecordCount) || context.cursor;
       for (const item of rows) {
         if (!validId(item?.Id)) continue;
-        if (isPhotoFolder(item)) {
-          context.grid.append(el('button', { type: 'button', class: 'photo-folder', onclick: () => void busy(null, () => renderPhotoFolder(context.library, item.Id, [...context.stack, { id: item.Id, name: item.Name || 'Carpeta' }], context.generation, context.libraries)) }, el('span', { 'aria-hidden': 'true' }, '▰'), el('span', {}, item.Name || 'Carpeta')));
-        } else if (isPhotoItem(item)) {
-          const index = context.items.length; context.items.push(item); context.grid.append(photoCard(item, index));
-        }
+        if (isPhotoFolder(item)) context.folders.push(item);
+        else if (isPhotoItem(item)) context.items.push(item);
       }
+      renderPhotoGrid(context);
       context.count.textContent = `${context.items.length} fotografías cargadas${context.total > context.cursor ? ' · hay más contenido en esta carpeta' : ''}`;
       context.more.hidden = context.cursor >= context.total || !rows.length;
       context.more.textContent = 'Cargar más fotos';
@@ -542,6 +607,8 @@ import { createCastControls } from './casting-sender.js';
     const form = el('form', { class: 'stack' }); const name = inputField(form, 'Nombre de la biblioteca', { required: true, maxLength: 80 });
     const type = inputField(form, 'Contenido', { tag: 'select' }); for (const [value, label] of [['movies', 'Películas'], ['tvshows', 'Series'], ['music', 'Música'], ['photos', 'Fotografías'], ['homevideos', 'Vídeos personales'], ['', 'Contenido mixto']]) type.append(el('option', { value }, label));
     const path = inputField(form, 'Ruta del servidor o enlace de Google Drive', { required: true, maxLength: 2048, placeholder: '/media/local/peliculas o https://drive.google.com/drive/folders/…' });
+    const enablePhotos = el('input', { type: 'checkbox' });
+    const enablePhotosLabel = el('label', { class: 'photo-index-option', hidden: true }, enablePhotos, ' Explorar fotografías de esta carpeta');
     const picker = el('section', { class: 'folder-picker', 'aria-label': 'Explorador de carpetas disponibles' });
     const source = el('select', { 'aria-label': 'Origen' }, el('option', { value: 'local' }, 'Disco local'), el('option', { value: 'cloud' }, 'Google Drive'));
     const folderSearch = el('input', { type: 'search', maxLength: 160, placeholder: 'Filtrar carpetas', 'aria-label': 'Filtrar carpetas' });
@@ -594,7 +661,7 @@ import { createCastControls } from './casting-sender.js';
     useFolder.addEventListener('click', () => { path.value = currentAbsolute; path.focus(); notify('Carpeta seleccionada. Revisa la ruta y guarda la biblioteca.'); });
     picker.append(el('h3', {}, 'Elegir una carpeta'), el('p', { class: 'note' }, 'Google Drive se recorre con tu cuenta vinculada. Las carpetas locales se muestran desde el servidor.'), source, folderSearch, folderBreadcrumbs, folderStatus, folderList, useFolder);
     void busy(null, loadFolders);
-    form.append(picker);
+    form.append(enablePhotosLabel, picker);
     const submit = el('button', { type: 'submit', class: 'primary' }, 'Conectar biblioteca'); form.append(submit);
     form.addEventListener('submit', event => { event.preventDefault(); void busy(submit, async () => {
       const value = path.value.trim();
@@ -602,7 +669,7 @@ import { createCastControls } from './casting-sender.js';
       try { const parsed = new URL(value); driveFolderLink = parsed.origin === 'https://drive.google.com' && /^\/drive\/folders\/[A-Za-z0-9_-]{10,200}\/?$/.test(parsed.pathname) && !parsed.username && !parsed.password && !parsed.hash; } catch {}
       if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !driveFolderLink) throw new Error('Introduce una ruta absoluta del servidor o un enlace válido de carpeta de Google Drive.');
       if (editingLibrary) {
-        const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [] } });
+        const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [], enablePhotos: enablePhotos.checked } });
         notify(result.scanRequested ? 'Carpeta actualizada. Esta biblioteca usará únicamente la ruta elegida al terminar la exploración.' : 'Carpeta guardada. Pulsa Buscar contenido nuevo para solicitar la exploración.');
         await navigate('admin'); return;
       }
@@ -614,12 +681,13 @@ import { createCastControls } from './casting-sender.js';
     const editLibrary = async library => {
       editingLibrary = library; name.value = library.Name; name.disabled = true; type.disabled = true;
       type.value = library.LibraryOptions?.EnablePhotos ? 'photos' : (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+      enablePhotosLabel.hidden = false; enablePhotos.checked = !!library.LibraryOptions?.EnablePhotos || /foto|photo|imagen|image/i.test(library.Name || '');
       path.value = library.Locations?.[0] || '';
       source.value = path.value.startsWith('/media/cloud') ? 'cloud' : 'local';
       currentRelative = ''; driveStack = []; driveNextPageToken = null; folderSearch.value = ''; submit.textContent = 'Guardar carpeta de esta biblioteca';
       form.scrollIntoView({ behavior: 'smooth', block: 'start' }); await loadFolders();
     };
-    form.append(button('Preparar biblioteca nueva', () => { editingLibrary = null; name.disabled = false; type.disabled = false; name.value = ''; path.value = ''; submit.textContent = 'Conectar biblioteca'; }, 'small-button'));
+    form.append(button('Preparar biblioteca nueva', () => { editingLibrary = null; name.disabled = false; type.disabled = false; name.value = ''; path.value = ''; enablePhotosLabel.hidden = true; enablePhotos.checked = false; submit.textContent = 'Conectar biblioteca'; }, 'small-button'));
     const cloudRoot = '/media/cloud';
     const cloudRegistered = (libraries || []).some(library => (library.Locations || []).some(location => location === cloudRoot || location.startsWith(`${cloudRoot}/`)));
     const driveStatus = await api('/api/admin/google-drive/status').catch(() => ({ configured: false, linked: false, mountVerified: false }));
@@ -632,7 +700,7 @@ import { createCastControls } from './casting-sender.js';
     connectDrive.disabled = !driveStatus.configured;
     const prepareDrive = async (contentType, label) => {
       editingLibrary = null; name.disabled = false; type.disabled = false; submit.textContent = 'Conectar biblioteca';
-      name.value = `${label} de Google Drive`; type.value = contentType;
+      name.value = `${label} de Google Drive`; type.value = contentType; enablePhotosLabel.hidden = true; enablePhotos.checked = contentType === 'photos';
       source.value = 'cloud'; currentRelative = ''; driveStack = []; driveNextPageToken = null; folderSearch.value = ''; path.value = '';
       form.scrollIntoView({ behavior: 'smooth', block: 'start' });
       await loadFolders();
@@ -641,6 +709,7 @@ import { createCastControls } from './casting-sender.js';
     const prepareCloud = button('Elegir carpeta de películas de Drive', () => prepareDrive('movies', 'Películas'), 'small-button');
     const preparePhotos = button('Elegir carpeta de fotos de Drive', () => prepareDrive('photos', 'Fotos'), 'small-button');
     const prepareMusic = button('Elegir carpeta de música de Drive', () => prepareDrive('music', 'Música'), 'small-button');
+    const prepareSeries = button('Elegir carpeta de series de Drive', () => prepareDrive('tvshows', 'Series'), 'small-button');
     const cloud = panel('Contenido en la nube',
       el('p', { class: 'note' }, 'Vincula Google desde su página oficial. JRPlex nunca solicita tu contraseña; guarda la autorización cifrada en el servidor. El montaje de rclone debe permanecer en solo lectura y se verifica por separado antes de compartir la biblioteca.'),
       el('div', { class: 'cloud-state' },
@@ -653,10 +722,10 @@ import { createCastControls } from './casting-sender.js';
       connectDrive,
       el('p', { class: 'note' }, 'Aviso de privacidad: para mostrar y reproducir el contenido, JRPlex lee los nombres, metadatos y archivos visibles en el Drive vinculado. La autorización se limita a lectura; el servidor conserva los tokens cifrados. ', el('a', { href: '/privacy' }, 'Consulta cómo se usan, protegen y eliminan estos datos.')),
       el('p', { class: 'note' }, 'Se solicita solo lectura. Usa una cuenta de Google dedicada que tenga acceso únicamente a tus medios; el permiso cubre los archivos visibles para esa cuenta.'),
-      el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, fotografías y música. Puedes recorrer Drive, pegar el enlace de una carpeta o elegir una ruta del servidor.'),
+      el('p', { class: 'note' }, 'Selecciona una carpeta distinta para películas, series, fotografías y música. Puedes recorrer Drive, pegar el enlace de una carpeta o elegir una ruta del servidor.'),
       el('p', { class: 'note' }, 'Usa los botones de mapeo al inicio de esta sección.'));
-    body.append(panel('Mapear carpetas de Google Drive', el('p', {}, 'Selecciona qué carpeta debe alimentar cada biblioteca. Si una biblioteca ya abarca todo Drive, usa Cambiar carpeta para limitarla primero; después conecta tus carpetas de música y fotos.'), prepareCloud, preparePhotos, prepareMusic), el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
-    if (state.mappingType) { const mappingType = state.mappingType; state.mappingType = null; await prepareDrive(mappingType, { movies: 'Películas', music: 'Música', photos: 'Fotos' }[mappingType] || 'Películas'); }
+    body.append(panel('Mapear carpetas de Google Drive', el('p', {}, 'Selecciona qué carpeta debe alimentar cada biblioteca. Puedes crear bibliotecas separadas para películas, series, música y fotografías.'), prepareCloud, prepareSeries, preparePhotos, prepareMusic), el('div', { class: 'admin-grid' }, listing, panel('Conectar una carpeta', form)), cloud);
+    if (state.mappingType) { const mappingType = state.mappingType; state.mappingType = null; await prepareDrive(mappingType, { movies: 'Películas', tvshows: 'Series', music: 'Música', photos: 'Fotos' }[mappingType] || 'Películas'); }
   }
   async function adminTorrents(body, generation) {
     const form = el('form', { class: 'stack' }); const magnet = inputField(form, 'Enlace magnet', { placeholder: 'magnet:?xt=urn:btih:…', maxLength: 8192 });

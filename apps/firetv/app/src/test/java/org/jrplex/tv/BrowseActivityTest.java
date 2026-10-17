@@ -40,7 +40,7 @@ public class BrowseActivityTest {
             if(path.endsWith("/link/start"))return new JSONObject().put("secret",SECRET).put("code","ABCD-EFGH").put("expiresAt",System.currentTimeMillis()+300000).put("verificationUrl",ReceiverProtocol.DEFAULT_SERVER+"/activate#code=ABCDEFGH");
             if(path.endsWith("/link/poll"))return approved?new JSONObject().put("status","approved").put("token",TOKEN):new JSONObject().put("status","pending");
             if(path.endsWith("/session"))return new JSONObject().put("user",new JSONObject().put("Name","Fixture account"));
-            if(path.startsWith("/api/tv/catalog"))return new JSONObject().put("items",new JSONArray().put(new JSONObject().put("Id","movie").put("Name","Fixture movie").put("Type","Movie"))).put("total",1);
+            if(path.startsWith("/api/tv/catalog"))return new JSONObject().put("items",new JSONArray().put(new JSONObject().put("Id","movie").put("Name","Fixture movie.mp4").put("Type","Movie").put("Playable",true)).put(new JSONObject().put("Id","subtitle").put("Name","Fixture movie.srt").put("Type","Movie").put("Playable",false))).put("total",2);
             if(path.startsWith("/api/tv/item"))return new JSONObject().put("Id","movie").put("Name","Fixture movie").put("Type","Movie").put("Position",12);
             if(path.endsWith("/play"))return new JSONObject().put("position",input.getDouble("position")).put("media",new JSONObject().put("id",MEDIA).put("url",ReceiverProtocol.DEFAULT_SERVER+"/cast/media/"+MEDIA+"/torrent").put("contentType","video/mp4").put("title","Fixture movie").put("canSeek",true).put("expiresAt",System.currentTimeMillis()+300000).put("mediaSourceId","source").put("playSessionId","session"));
             if(path.endsWith("/progress"))progress.add(input);
