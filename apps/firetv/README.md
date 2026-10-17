@@ -1,32 +1,44 @@
-# JRPlex TV 1.0.0 · Fire OS
+# JRPlex TV 2.0.0 · cliente autónomo Fire OS
 
-Receptor Android nativo para enviar el vídeo que ya se reproduce en JRPlex. No usa WebView, Silk, Google Play Services ni Fling. ExoPlayer/Media3 reproduce MP4/WebM y HLS con el mando y una MediaSession. API mínima 23 (Android 6); los modelos Fire TV con Vega OS necesitan otra implementación y no aceptan esta APK.
+La app abre y reproduce tu biblioteca con el mando: películas, series y temporadas, álbumes/pistas, fotos, búsqueda, paginación y continuar donde lo dejaste. El teléfono se usa para vincular la cuenta una vez; después puedes cerrarlo. Media3 reproduce el contenido desde el servidor, sin PC, Silk, WebView, Google Play Services ni Fling. Requiere API23+ (Fire OS6+); **Vega OS no admite esta APK**.
 
-## Instalar y usar
+## Instalar o actualizar
 
-Descarga `jrplex-firetv-1.0.0.apk` desde [la versión publicada](https://github.com/oreyes100/JRPlex/releases/tag/firetv-v1.0.0), o abre `https://jrplexps.duckdns.org/firetv` con Downloader en Fire TV. Permite instalar desde esa aplicación en la configuración de tu Fire TV. No requiere acceso root. La instalación en un dispositivo por ADB se hace con autorización de depuración del propietario:
+[APK2.0.0 y firma](https://github.com/oreyes100/JRPlex/releases/tag/firetv-v2.0.0) · [Instalación desde Downloader](https://jrplexps.duckdns.org/firetv). Instala encima de la versión1: mismo paquete `org.jrplex.tv`, misma clave de firma y `versionCode=2`. No hace falta desinstalar.
 
 ```sh
 adb connect IP_DE_TU_FIRE_TV:5555
-adb install -r jrplex-firetv-1.0.0.apk
-adb shell am start -n org.jrplex.tv/.ReceiverActivity
+adb install -r jrplex-firetv-2.0.0.apk
+adb shell am start -n org.jrplex.tv/.BrowseActivity
 ```
 
-Abre **JRPlex TV**, después **Enviar a TV** en el reproductor del móvil/computadora y copia el código. El código caduca en cinco minutos y se renueva solo; una vez enlazada, la pantalla está disponible durante la sesión del emisor. La TV puede estar en otra red siempre que alcance el servidor HTTPS. El mando controla reproducción, pausa y búsqueda; Atrás confirma detener y volver al dispositivo emisor. Salir a inicio libera vídeo, decoder y enlace. Al abrir de nuevo hay que vincular otra vez. Una interrupción de red muestra el problema y reintenta con espera creciente; si se pierde el control por 15 segundos, detiene el vídeo. Los torrents convertidos no permiten búsqueda y arrancan desde el principio.
+Abre **JRPlex TV** y escanea el QR con el teléfono. También puedes abrir `https://jrplexps.duckdns.org/activate` y escribir el código de ocho caracteres que aparece en la TV. Confirma la pantalla e introduce tus credenciales JRPlex **en el teléfono**; el gestor de contraseñas puede rellenarlas. Se crea un acceso independiente para la TV. El QR no contiene la contraseña ni el acceso de la cuenta. No necesita que el navegador del teléfono permanezca abierto ni que conserve su sesión.
 
-El servidor predeterminado es `https://jrplexps.duckdns.org`; **Cambiar servidor** permite otro origen HTTPS, sin rutas. Solo esa dirección se guarda en preferencias privadas. La app no pide ni guarda contraseñas, cookies, tokens Jellyfin o credenciales Drive. El secreto de vinculación y la capacidad limitada al vídeo están en memoria. No hay servicio en segundo plano, analítica ni permisos de almacenamiento, micrófono o ubicación. `allowBackup=false`. TLS utiliza el almacén de confianza del sistema; no se omite la verificación de certificados. El control usa `start/poll/end` con Origin y la capacidad del receptor. Los medios solo se aceptan del mismo servidor bajo el enlace temporal `/cast/media/` recibido.
+Al abrir nuevamente la app o reiniciar el servidor se restaura el acceso de TV; dura 30 días. En **Cuenta → Desvincular esta TV** se revoca solo ese dispositivo. Cambiar servidor también elimina el acceso anterior. Cerrar sesión en la web no cierra la TV. Cambiar la contraseña de la cuenta desde JRPlex o desactivarla sí revoca sus accesos. El límite es20 TVs por cuenta.
 
-## Compilar y verificar
+Usa **Inicio, Continuar, Películas, Series, Música, Fotos, Buscar** con el mando. Las carpetas y temporadas se abren; los títulos permiten reproducir o continuar su avance. Atrás guarda el avance y vuelve a la biblioteca; ir al inicio de Fire TV detiene/revoca la transferencia y libera el decoder, conservando el acceso a la cuenta. Se registra el avance aproximadamente cada10segundos y al detener. La disponibilidad real del contenido depende de la biblioteca y permisos de esa cuenta.
 
-Necesita JDK 17 y Android SDK 36; Gradle 8.14.3 y AGP 8.13.0 están fijados. Las dependencias se descargan de Google Maven y Maven Central. Configura `ANDROID_HOME` o tu archivo **local** `local.properties`. No guardes rutas personales ni claves en Git.
+La función opcional **Cuenta → Recibir un envío** conserva el receptor por código de seis dígitos para envíos del reproductor web. Es diferente del código de cuenta de ocho caracteres. Ese receptor termina al salir; los torrents convertidos no permiten búsqueda y se envían desde el principio.
+
+## Privacidad y servidor
+
+El servidor predeterminado es `https://jrplexps.duckdns.org`; puede cambiarse a otro origen HTTPS. La TV guarda una credencial aleatoria cifrada mediante Android Keystore/AES-GCM y vinculada al origen del servidor; no guarda contraseñas ni tokens de Jellyfin/Drive. Se deshabilitan backups y transferencias de las preferencias. No usa analítica ni permisos de archivos, micrófono o ubicación. Los medios se solicitan con capacidades temporales del título autorizado. Las peticiones de biblioteca usan `Authorization: Bearer` únicamente en la API limitada de TV, que no expone administración ni proxy arbitrario.
+
+Configura `TV_STATE_DIR` en el gateway para conservar las cuentas al reiniciar. Compose monta `runtime/tv` en `/var/lib/jrplex/tv`; el instalador y la publicación deben crear ese directorio con UID/GID del servicio y modo0700. El gateway crea `devices.key` y `devices.enc` con modo0600; no los publiques ni los incluyas en archivos de código. El estado contiene un hash de la credencial TV y el token upstream cifrado AES-GCM. Conserva ambos archivos en el respaldo privado de ejecución. Sin `TV_STATE_DIR` el almacenamiento es solo memoria y un reinicio exige volver a vincular.
+
+La página de activación conserva CSP y origen estricto. El código vence a los5minutos; la confirmación requiere credenciales válidas de JRPlex y límites por IP/cuenta/código. El servidor autentica un dispositivo Jellyfin específico para que el logout web no invalide la TV. La credencial solo se entrega al secreto privado de la solicitud de la TV; nunca aparece en el QR, URL, página de confirmación o logs.
+
+## Build y verificación
+
+JDK17, AndroidSDK36, Gradle8.14.3 con checksum y AGP8.13.0. Configura `ANDROID_HOME` o `local.properties` privado.
 
 ```sh
 cd apps/firetv
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-La APK de desarrollo queda en `app/build/outputs/apk/debug/app-debug.apk`. Robolectric comprueba el protocolo, validación de URL/expiración, estado, enlace, reintento, comandos duplicados, mando y liberación al salir; el reproductor está simulado en esas pruebas. La suite Node del repositorio verifica autorización, revocación de transferencias y el endpoint nativo de desconexión. Esto no sustituye la prueba de decodificación, audio/foco, mando y suspensión en un Fire TV físico; esa validación no se ha realizado.
+Las pruebas JVM/Robolectric cubren QR real codificado/decodificado, cifrado y origen, biblioteca desde cuenta guardada sin emisor, reproducción/control/avance mediante doble de player y construcción/cierre de Media3 en API23/API28. Node verifica persistencia del servidor, autorización, vida independiente del navegador, revocación y el GUID real de Jellyfin con/sin guiones. Las regresiones Chrome verifican la activación y bytes/fotogramas reales de fixtures. Estas pruebas no sustituyen una prueba de decoder/audio/mando/suspensión en un Fire TV físico, aún no disponible.
 
-Para una APK de distribución usa un keystore persistente propio. Define `JRP_TV_KEYSTORE` (ruta absoluta), `JRP_TV_STORE_PASSWORD` y `JRP_TV_KEY_PASSWORD`; alias `jrplex-tv`. Después ejecuta `./gradlew assembleRelease`. Sin esas variables el release es **sin firmar**. Nunca publiques el keystore ni sus contraseñas. Conserva una copia segura: las actualizaciones requieren la misma firma y un `versionCode` mayor. La clave de esta primera distribución se conserva fuera de Git bajo `secrets/firetv/`; el certificado público y SHA-256 de la APK se adjuntan a la versión. No se ha enviado a Amazon Appstore.
+Para distribución configura `JRP_TV_KEYSTORE`, `JRP_TV_STORE_PASSWORD`, `JRP_TV_KEY_PASSWORD` (alias `jrplex-tv`) y ejecuta `./gradlew --no-configuration-cache assembleRelease lintRelease`. La clave persistente de este proyecto permanece en `secrets/firetv/` fuera de Git. Respalda la clave y su contraseña: futuras actualizaciones necesitan la misma firma y un `versionCode` mayor. Sin esas variables el release es **sin firmar**. La versión publicada adjunta SHA256, certificado público y manifiesto. No se publica en Amazon Appstore.
 
-Fuentes: [Fire OS y versiones](https://developer.amazon.com/docs/fire-tv/fire-os-overview.html), [app de TV y manifiesto](https://developer.android.com/training/tv/get-started/create), [Media3](https://developer.android.com/media/media3/exoplayer/hello-world), [Vega](https://developer.amazon.com/apps-and-games/blogs/2026/07/guide-to-building-for-fire-tv-on-vega-os).
+Fuentes: [Fire OS](https://developer.amazon.com/docs/fire-tv/fire-os-overview.html), [Media3](https://developer.android.com/media/media3/exoplayer/hello-world), [Android Keystore](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec), [ZXing](https://github.com/zxing/zxing).

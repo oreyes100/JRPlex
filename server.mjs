@@ -10,6 +10,7 @@ import { createTorrentClient } from './lib/torrents.mjs';
 import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
 import { createCasting } from './lib/casting.mjs';
+import { createTvAccess } from './lib/tv-access.mjs';
 
 export { loadConfig } from './lib/security.mjs';
 const projectRoot = dirname(fileURLToPath(import.meta.url));
@@ -19,8 +20,8 @@ const publicUser = (user) => ({ Id: user.Id, Name: user.Name, Policy: { IsAdmini
 
 export function createApp(config = loadConfig(), options = {}) {
   const sessions = new Map();
-  let casting;
-  function dropSession(id) { sessions.delete(id); casting?.revokeSession(id); }
+  let casting; let tvAccess;
+  function dropSession(id) { sessions.delete(id); casting?.revokeSession(id); tvAccess?.revokeSession(id); }
   const attempts = new Map();
   const mappingOperations = new Set();
   const torrent = options.torrentClient || createTorrentClient(config);
@@ -72,7 +73,7 @@ export function createApp(config = loadConfig(), options = {}) {
     try {
       const response = await fetch(`${config.jellyfinUrl}${path}`, {
         method, redirect: 'manual', signal: controller.signal,
-        headers: { Authorization: `MediaBrowser Client="JRPlex", Device="Web", DeviceId="${session?.deviceId || 'JRPlex-Gateway'}", Version="0.1.0"${session?.token ? `, Token="${session.token}"` : ''}`, ...headers },
+        headers: { Authorization: `MediaBrowser Client="JRPlex", Device="${session?.kind === 'tv' ? 'Fire TV' : 'Web'}", DeviceId="${session?.deviceId || 'JRPlex-Gateway'}", Version="${session?.kind === 'tv' ? '2.0.0' : '0.1.0'}"${session?.token ? `, Token="${session.token}"` : ''}`, ...headers },
         ...(requestBody ? { body: requestBody } : {}),
       });
       if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); throw new HttpError(502, 'Upstream redirect rejected'); }
@@ -205,7 +206,7 @@ export function createApp(config = loadConfig(), options = {}) {
 
   async function staticFile(req, res, route) {
     if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, 'Method not allowed');
-    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/tv': 'tv.html', '/tv/': 'tv.html', '/firetv': 'firetv.html', '/firetv/': 'firetv.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
+    const aliases = { '/': 'home.html', '/app': 'index.html', '/app/': 'index.html', '/tv': 'tv.html', '/tv/': 'tv.html', '/activate': 'activate.html', '/activate/': 'activate.html', '/firetv': 'firetv.html', '/firetv/': 'firetv.html', '/privacy': 'privacy.html', '/privacy/': 'privacy.html' };
     const filename = aliases[route] || route.slice(1);
     if (filename.split('/').some((part) => part.startsWith('.'))) throw new HttpError(404, 'Not found');
     const path = resolve(publicDir, filename);
@@ -269,6 +270,7 @@ export function createApp(config = loadConfig(), options = {}) {
         sessions.set(id, session);
         send(res, 200, { user: session.user, csrfToken: session.csrfToken }, { 'Set-Cookie': cookie(id) }); return;
       }
+      if (route.startsWith('/api/tv/') && await tvAccess.handle(req, res, route)) return;
       if (route.startsWith('/cast/') && await casting.handlePublic(req, res, route)) return;
       if (route.startsWith('/api/') || route.startsWith('/jellyfin/')) {
         const session = sessionFor(req);
@@ -368,7 +370,8 @@ export function createApp(config = loadConfig(), options = {}) {
   const server = http.createServer({ maxHeaderSize: 16 * 1024, requestTimeout: 120000, headersTimeout: 15000 }, handler);
   server.maxRequestsPerSocket = 1000;
   casting = createCasting(config, { sessions, upstream, jsonResponse, currentUser, requireAdmin, torrent, proxy, body, send, sameOrigin, rateLimit, clientIp, now: options.castingNow || Date.now });
-  return { server, handler, sessions, config, close: () => { casting.close(); googleOAuth.close?.(); torrent.close?.(); } };
+  tvAccess = createTvAccess(config, { sessions, upstream, jsonResponse, currentUser, body, send, sameOrigin, rateLimit, clientIp, casting, dropSession, authorizeItem, now: options.tvNow || Date.now, ...(options.tvStore ? { store: options.tvStore } : {}) });
+  return { server, handler, sessions, config, close: () => { casting.close(); tvAccess.close(); googleOAuth.close?.(); torrent.close?.(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

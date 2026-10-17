@@ -53,7 +53,7 @@ public class ReceiverActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { handleBack(); }
         });
-        server = getPreferences(MODE_PRIVATE).getString("server", ReceiverProtocol.DEFAULT_SERVER);
+        server = ReceiverProtocol.origin(getIntent().getStringExtra("server") != null ? getIntent().getStringExtra("server") : getPreferences(MODE_PRIVATE).getString("server", ReceiverProtocol.DEFAULT_SERVER));
         root = new FrameLayout(this); root.setBackgroundColor(Color.rgb(16, 20, 24)); setContentView(root);
         player = createPlayback(root);
         pairing = new LinearLayout(this); pairing.setOrientation(LinearLayout.VERTICAL); pairing.setGravity(Gravity.CENTER);
@@ -224,8 +224,8 @@ public class ReceiverActivity extends AppCompatActivity {
             android.widget.ScrollView scroll = new android.widget.ScrollView(this);
             TextView text = new TextView(this); text.setTextSize(15); text.setPadding(dp(24), dp(12), dp(24), dp(12));
             text.setText(new String(readAsset(notice), java.nio.charset.StandardCharsets.UTF_8) + "\n\n" + new String(readAsset(license), java.nio.charset.StandardCharsets.UTF_8));
-            scroll.addView(text); new AlertDialog.Builder(this).setTitle("JRPlex TV 1.0.0 · Licencias").setView(scroll).setPositiveButton("Cerrar", null).show();
-        } catch (java.io.IOException error) { status.setText("JRPlex TV 1.0.0 · github.com/oreyes100/JRPlex"); }
+            scroll.addView(text); new AlertDialog.Builder(this).setTitle("JRPlex TV 2.0.0 · Licencias").setView(scroll).setPositiveButton("Cerrar", null).show();
+        } catch (java.io.IOException error) { status.setText("JRPlex TV 2.0.0 · github.com/oreyes100/JRPlex"); }
     }
     private byte[] readAsset(java.io.InputStream stream) throws java.io.IOException {
         java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(); byte[] part = new byte[4096]; int count;

@@ -1,12 +1,17 @@
-JRPlex TV 1.0.0
+JRPlex TV 2.0.0
 
 This distribution includes software from:
 
-AndroidX (including Activity 1.11.0, AppCompat 1.7.1, Media3 1.11.1,
+AndroidX (including Activity 1.11.0, AppCompat 1.7.1, Media3 1.11.1, RecyclerView 1.4.0,
 and their AndroidX transitive dependencies)
 Copyright The Android Open Source Project
 https://github.com/androidx/androidx
 https://github.com/androidx/media
+Apache License 2.0
+
+ZXing core 3.5.4 (QR encoding/decoding)
+Copyright ZXing authors
+https://github.com/zxing/zxing
 Apache License 2.0
 
 Guava 33.3.1-android, failureaccess 1.0.2, and listenablefuture

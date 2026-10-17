@@ -24,4 +24,15 @@ public class NativePlaybackTest {
             controller.pause().stop();
         }
     }
+    public static class NativeBrowse extends BrowseActivity {
+        final BrowseActivityTest.Api fixture = new BrowseActivityTest.Api();
+        @Override protected TvApi createApi(String origin, String token) { return fixture; }
+        @Override protected AccountStore createStore() { return new BrowseActivityTest.MemoryStore(); }
+    }
+    @Test public void standaloneLauncherConstructsAndReleasesNativePlayerOnMinimumSdk() {
+        try (var controller = Robolectric.buildActivity(NativeBrowse.class).setup()) {
+            assertNotNull(controller.get().findViewById(BrowseActivity.STATUS));
+            controller.pause().stop();
+        }
+    }
 }

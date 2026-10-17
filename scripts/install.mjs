@@ -11,7 +11,7 @@ try {
     if (!['compose', 'native'].includes(mode)) throw new Error('Modo esperado: compose o native.');
     if (mode === 'compose' && process.platform !== 'linux') throw new Error('Jellyfin en contenedor solo se soporta aquí sobre Linux. Usa --mode native en Windows/macOS.');
     if (process.getuid?.() === 0 && !opt['dry-run']) throw new Error('Ejecuta el instalador como cuenta no root para crear datos con propietario seguro.');
-    const folders = ['jellyfin/config', 'jellyfin/cache', 'media/local', 'media/cloud', 'downloads/complete', 'downloads/incomplete', 'qbittorrent/qBittorrent', 'caddy/data', 'caddy/config', 'secrets'];
+    const folders = ['jellyfin/config', 'jellyfin/cache', 'media/local', 'media/cloud', 'downloads/complete', 'downloads/incomplete', 'qbittorrent/qBittorrent', 'caddy/data', 'caddy/config', 'secrets', 'tv'];
     if (opt['dry-run']) {
       console.log(`Modo ${mode}; raíz ${project}; se crearían .env si falta y ${folders.length} directorios bajo runtime/. Sin cambios.`);
     } else {

@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101418"><title>Vincular mi TV · JRPlex</title><link rel="stylesheet" href="/casting.css"><script type="module" src="/activate.js"></script></head>
+<body class="tv-page"><header class="tv-header"><a href="/">JRPlex</a></header><main class="activate-panel"><h1>Vincula tu cuenta con la TV</h1>
+<p>Escanea el QR de la app o introduce el código que aparece en tu televisor.</p>
+<form id="device-code-form"><label for="device-code">Código de la TV</label><input id="device-code" name="code" maxlength="9" placeholder="ABCD-EFGH" autocomplete="off" autocapitalize="characters" required><button type="submit">Verificar TV</button></form>
+<form id="device-approve-form" hidden><h2 id="device-name"></h2><p id="device-confirm-code"></p><p>Tu cuenta quedará disponible en esta TV durante 30 días. Después podrás usarla con el mando, sin mantener abierto el teléfono.</p>
+<label for="device-user">Usuario JRPlex</label><input id="device-user" name="username" autocomplete="username" required maxlength="256">
+<label for="device-password">Contraseña JRPlex</label><input id="device-password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+<p>La contraseña se usa aquí para iniciar una sesión propia de la TV. No se envía ni se guarda en el televisor.</p><button type="submit">Vincular mi cuenta con esta TV</button><button type="button" id="device-cancel">Cancelar</button></form>
+<p id="device-message" role="status" aria-live="polite"></p><p id="device-success" hidden>Listo. Ya puedes explorar y reproducir desde la TV con el mando. Puedes cerrar esta página.</p><p><a href="/firetv">Instalar o actualizar JRPlex TV</a> · <a href="/privacy">Privacidad</a></p>
+</main></body></html>

@@ -15,10 +15,10 @@ async function fixture(t) {
     if (url.pathname === '/Users/AuthenticateByName') { const name = JSON.parse(raw).Username; return json({ AccessToken: `${name}_PRIVATE_TOKEN`, User: user(name) }); }
     const name = req.headers.authorization?.includes('bob_PRIVATE_TOKEN') ? 'bob' : 'alice';
     if (url.pathname === '/Users/Me') return json(user(name));
-    if (/^\/Users\/(alice|bob)\/Items\/movie$/.test(url.pathname)) return json({ Id: 'movie', Name: 'Synthetic film', Type: 'Movie', MediaType: 'Video' }, state.denied ? 404 : 200);
-    if (url.pathname === '/Items/movie/PlaybackInfo') return json({ PlaySessionId: 'play_session', MediaSources: [{ Id: 'source', SupportsDirectPlay: !state.hls && !state.external, Container: 'mp4', MediaStreams: [{ Type: 'Video', Codec: 'h264', BitDepth: 8, Level: 40 }, { Type: 'Audio', Codec: 'aac' }], TranscodingUrl: state.external ? 'https://evil.invalid/movie.m3u8?api_key=PRIVATE' : '/videos/movie/master.m3u8?api_key=PRIVATE&MediaSourceId=source' }] });
-    if (url.pathname === '/Videos/movie/master.m3u8') { res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' }); return res.end('#EXTM3U\n#EXT-X-MAP:URI="init.mp4?api_key=PRIVATE"\n#EXT-X-KEY:METHOD=AES-128,URI="key?AccessToken=PRIVATE"\nchild/segment.ts\n'); }
-    if (url.pathname === '/Videos/movie/child/segment.ts') { res.writeHead(200, { 'content-type': 'video/mp2t' }); return res.end('segment'); }
+    if (/^\/Users\/(alice|bob)\/Items\/[A-Za-z0-9_-]+$/.test(url.pathname)) return json({ Id: url.pathname.split('/').at(-1), Name: 'Synthetic film', Type: 'Movie', MediaType: 'Video' }, state.denied ? 404 : 200);
+    if (/^\/Items\/[A-Za-z0-9_-]+\/PlaybackInfo$/.test(url.pathname)) return json({ PlaySessionId: 'play_session', MediaSources: [{ Id: 'source', SupportsDirectPlay: !state.hls && !state.external, Container: 'mp4', MediaStreams: [{ Type: 'Video', Codec: 'h264', BitDepth: 8, Level: 40 }, { Type: 'Audio', Codec: 'aac' }], TranscodingUrl: state.external ? 'https://evil.invalid/movie.m3u8?api_key=PRIVATE' : `/videos/${state.transcodeId || url.pathname.split('/')[2]}/master.m3u8?api_key=PRIVATE&MediaSourceId=source` }] });
+    if (/^\/Videos\/[A-Za-z0-9_-]+\/master.m3u8$/.test(url.pathname)) { res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' }); return res.end('#EXTM3U\n#EXT-X-MAP:URI="init.mp4?api_key=PRIVATE"\n#EXT-X-KEY:METHOD=AES-128,URI="key?AccessToken=PRIVATE"\nchild/segment.ts\n'); }
+    if (/^\/Videos\/[A-Za-z0-9_-]+\/child\/segment.ts$/.test(url.pathname)) { res.writeHead(200, { 'content-type': 'video/mp2t' }); return res.end('segment'); }
     if (url.pathname === '/Videos/movie/stream.mp4') {
       if (state.slow) { res.writeHead(200, { 'content-type': 'video/mp4' }); res.write('first-frame'); return; }
       const partial = !!req.headers.range; res.writeHead(partial ? 206 : 200, { 'content-type': 'video/mp4', 'content-length': partial ? 4 : 8, 'accept-ranges': 'bytes', ...(partial ? { 'content-range': 'bytes 2-5/8' } : {}) }); return res.end(req.method === 'HEAD' ? undefined : partial ? '2345' : '01234567');
@@ -70,6 +70,16 @@ test('HLS children, init and key URIs keep the scoped capability and upstream cr
   assert.equal((await f.call(session, '/api/cast/media', { kind: 'library', itemId: 'movie' })).status, 502);
 });
 
+test('real Jellyfin compact catalogue GUID and dashed HLS GUID represent the same authorized item only', async t => {
+  const f = await fixture(t); const session = await f.login(); f.state.hls = true;
+  const compact = '0123456789abcdef0123456789abcdef'; const dashed = '01234567-89AB-CDEF-0123-456789ABCDEF'; f.state.transcodeId = dashed;
+  const response = await f.call(session, '/api/cast/media', { kind: 'library', itemId: compact }); assert.equal(response.status, 201);
+  const media = await response.json(); const manifest = await f.request(media.url); assert.equal(manifest.status, 200);
+  const segment = (await manifest.text()).split('\n').find(line => line.includes('segment.ts')); assert.equal(await (await f.request(segment)).text(), 'segment');
+  assert.equal((await f.request(media.url.replace(dashed, '11234567-89AB-CDEF-0123-456789ABCDEF'))).status, 403);
+  f.state.transcodeId = 'MOVIE'; assert.equal((await f.call(session, '/api/cast/media', { kind: 'library', itemId: 'movie' })).status, 502);
+});
+
 test('regular users cast their permitted library items, other sessions cannot revoke grants and media expires', async t => {
   const f = await fixture(t); f.state.admin = false; const session = await f.login(); const other = await f.login('bob');
   f.state.denied = true;
@@ -117,7 +127,7 @@ test('expired codes and receiver secrets are rejected and pairing guesses are bo
 test('native TV ending a receiver requires its secret and same origin, and revokes only its media and pairing', async t => {
   const f = await fixture(t); const owner = await f.login();
   const installer = await f.request('/firetv'); assert.equal(installer.status, 200);
-  const page = await installer.text(); assert.match(page, /jrplex-firetv-1\.0\.0\.apk/); assert.match(page, /Vega OS/);
+  const page = await installer.text(); assert.match(page, /jrplex-firetv-2\.0\.0\.apk/); assert.match(page, /Vega OS/);
   assert.match(installer.headers.get('content-security-policy'), /default-src 'none'/);
   const started = await (await f.receiverCall('/cast/receiver/start', { name: 'JRPlex Fire TV' })).json();
   const receiver = await (await f.call(owner, '/api/cast/pair', { code: started.code })).json();
