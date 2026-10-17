@@ -665,7 +665,10 @@ import { createCastControls } from './casting-sender.js';
     const [libraries, views] = await Promise.all([api('/jellyfin/Library/VirtualFolders'), api(`/jellyfin/Users/${state.session.user.Id}/Views`)]); if (generation !== state.generation) return;
     let editingLibrary = null;
     const listing = panel('Bibliotecas del servidor');
-    const libraryType = library => library.LibraryOptions?.EnablePhotos === true ? 'photos' : library.CollectionType || (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+    const libraryType = library => {
+      const collectionType = library.CollectionType || (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+      return collectionType && collectionType !== 'homevideos' ? collectionType : library.LibraryOptions?.EnablePhotos === true ? 'photos' : collectionType;
+    };
     const sameLibraryContent = (left, right) => {
       const normalizePath = value => typeof value === 'string' ? value.replace(/\/+$/, '') : '';
       const leftPaths = Array.isArray(left.Locations) ? left.Locations.map(normalizePath).sort() : [];
@@ -674,7 +677,9 @@ import { createCastControls } from './casting-sender.js';
     };
     for (const library of libraries || []) {
       const row = el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), button('Cambiar carpeta', () => editLibrary(library), 'small-button'));
-      if ((libraries || []).some(other => other.ItemId !== library.ItemId && sameLibraryContent(library, other))) row.append(button('Quitar duplicado', async () => {
+      const twins = (libraries || []).filter(other => other.ItemId !== library.ItemId && sameLibraryContent(library, other));
+      const keepsPhotoIndexing = library.LibraryOptions?.EnablePhotos !== true || twins.some(other => other.LibraryOptions?.EnablePhotos === true);
+      if (twins.length && keepsPhotoIndexing) row.append(button('Quitar duplicado', async () => {
         if (!window.confirm(`Quitar la configuración duplicada “${library.Name}”? La otra biblioteca seguirá usando la misma carpeta y no se borrarán archivos de Drive.`)) return;
         await api(`/api/admin/libraries/${encodeURIComponent(library.ItemId)}/duplicate`, { method: 'DELETE' });
         notify('Configuración duplicada retirada. Los archivos de Drive siguen intactos.'); await navigate('admin');

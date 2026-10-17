@@ -648,6 +648,18 @@ test('duplicate cleanup removes only a library with an exact path and media-type
   assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'DELETE').length, 1);
 });
 
+test('duplicate cleanup recognizes music libraries with different photo flags and preserves the photo index', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { ItemId: 'music-photos', Name: 'Música de Google Drive', CollectionType: 'music', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: true } },
+    { ItemId: 'music-copy', Name: 'Música de Google Drive2', CollectionType: 'music', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: false } },
+  ];
+  const remove = id => f.request(`/api/admin/libraries/${id}/duplicate`, { method: 'DELETE', headers: authHeaders(session, f.config) });
+  assert.equal((await remove('music-photos')).status, 409, 'do not remove the only configuration indexing photos');
+  assert.equal((await remove('music-copy')).status, 200, 'the non-photo duplicate remains safely removable');
+  assert.deepEqual(f.state.libraries.map(library => library.ItemId), ['music-photos']);
+});
+
 test('duplicate cleanup refuses ambiguous Jellyfin library names before deleting by name', async t => {
   const f = await fixture(t); const session = await f.login();
   f.state.libraries = [
