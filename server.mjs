@@ -53,6 +53,10 @@ export function createApp(config = loadConfig(), options = {}) {
   }
   function sameOrigin(req) { if (req.headers.origin !== config.publicUrl) throw new HttpError(403, 'Origin rejected'); }
   function csrf(req, session) { sameOrigin(req); if (!equal(req.headers['x-csrf-token'], session.csrfToken)) throw new HttpError(403, 'CSRF token rejected'); }
+  function selectedLibraryName(value) {
+    if (typeof value !== 'string' || !value.trim() || value.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, 'Selecciona una biblioteca válida.');
+    return value.trim();
+  }
   function clientIp(req) {
     const socketIp = normalizeIp(req.socket.remoteAddress) || 'unknown';
     if ((config.trustedProxyIps || []).includes(socketIp)) return normalizeIp(req.headers['x-real-ip']) || socketIp;
@@ -310,21 +314,27 @@ export function createApp(config = loadConfig(), options = {}) {
             return;
           }
           const mappingMatch = route.match(/^\/api\/admin\/libraries\/([A-Za-z0-9_-]{1,128})\/path$/);
-          if (mappingMatch && req.method === 'POST') {
-            const input = await body(req); const id = mappingMatch[1];
-            if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca ya está guardando una ruta.');
-            mappingOperations.add(id);
-            try { send(res, 200, await withLibraryStructureLock(async () => replaceLibraryPath({ id, input: { ...input, path: await resolveLibraryPath(input.path) }, session, upstream, jsonResponse }))); }
-            finally { mappingOperations.delete(id); }
+          if ((route === '/api/admin/libraries/path' || mappingMatch) && req.method === 'POST') {
+            const input = await body(req);
+            const name = typeof input.name === 'string' ? selectedLibraryName(input.name) : undefined;
+            const id = mappingMatch?.[1]; const key = name || id;
+            if (!key) throw new HttpError(400, 'Selecciona una biblioteca válida.');
+            if (mappingOperations.has(key)) throw new HttpError(409, 'Esta biblioteca ya está guardando una ruta.');
+            mappingOperations.add(key);
+            try { send(res, 200, await withLibraryStructureLock(async () => replaceLibraryPath({ name, id, input: { ...input, path: await resolveLibraryPath(input.path) }, session, upstream, jsonResponse }))); }
+            finally { mappingOperations.delete(key); }
             return;
           }
           const duplicateMatch = route.match(/^\/api\/admin\/libraries\/([A-Za-z0-9_-]{1,128})\/duplicate$/);
-          if (duplicateMatch && req.method === 'DELETE') {
-            const id = duplicateMatch[1];
-            if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca está cambiando de ruta.');
-            mappingOperations.add(id);
-            try { send(res, 200, await withLibraryStructureLock(() => removeDuplicateLibrary({ id, session, upstream, jsonResponse }))); }
-            finally { mappingOperations.delete(id); }
+          if ((route === '/api/admin/libraries/duplicate' || duplicateMatch) && req.method === 'DELETE') {
+            const input = route === '/api/admin/libraries/duplicate' ? await body(req) : {};
+            const name = typeof input.name === 'string' ? selectedLibraryName(input.name) : undefined;
+            const id = duplicateMatch?.[1]; const key = name || id;
+            if (!key) throw new HttpError(400, 'Selecciona una biblioteca válida.');
+            if (mappingOperations.has(key)) throw new HttpError(409, 'Esta biblioteca está cambiando de ruta.');
+            mappingOperations.add(key);
+            try { send(res, 200, await withLibraryStructureLock(() => removeDuplicateLibrary({ name, id, session, upstream, jsonResponse }))); }
+            finally { mappingOperations.delete(key); }
             return;
           }
           if (route === '/api/admin/google-drive/folders' && req.method === 'GET') {

@@ -8,7 +8,7 @@ import { torrentInput } from '../lib/torrents.mjs';
 
 async function start(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t, overrides = {}, options = {}) {
-  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0, libraryCreateDelay: 0, libraryRefreshDelay: 0, dropLibraryCreateResponse: false, scanTaskState: 'Idle', scanTaskProgress: 0, scanTaskStarts: 0 };
+  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], views: null, failRemovePath: false, itemsDelay: 0, libraryCreateDelay: 0, libraryRefreshDelay: 0, dropLibraryCreateResponse: false, scanTaskState: 'Idle', scanTaskProgress: 0, scanTaskStarts: 0 };
   const user = () => ({ Id: 'alice', Name: 'Alice', Policy: { IsAdministrator: state.admin, IsDisabled: state.disabled } });
   const media = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -21,7 +21,7 @@ async function fixture(t, overrides = {}, options = {}) {
     }
     if (!req.headers.authorization?.includes('Token="TOP_SECRET_TOKEN"')) return json({}, 401);
     if (url.pathname === '/Users/Me') return json(user());
-    if (url.pathname === '/Users/alice/Views') return json({ Items: [{ Id: 'photo-library', Name: 'Photos', CollectionType: 'photos' }] });
+    if (url.pathname === '/Users/alice/Views') return json({ Items: state.views || (state.libraries.length ? state.libraries.map((library, index) => ({ Id: library.ItemId || `view-${index}`, Name: library.Name, CollectionType: library.CollectionType })) : [{ Id: 'photo-library', Name: 'Photos', CollectionType: 'photos' }]) });
     if (url.pathname === '/Environment/DirectoryContents') {
       const locations = {
         '/media/local': [{ Name: 'Peliculas' }, { Name: 'Musica' }, { Name: '../escape' }],
@@ -88,7 +88,10 @@ async function fixture(t, overrides = {}, options = {}) {
       res.writeHead(204); return res.end();
     }
     if (url.pathname === '/Library/VirtualFolders/LibraryOptions' && req.method === 'POST') {
-      const input = raw ? JSON.parse(raw) : {}; const library = state.libraries.find(l => l.ItemId === input.Id);
+      const input = raw ? JSON.parse(raw) : {};
+      const views = state.views || state.libraries.map((library, index) => ({ Id: library.ItemId || `view-${index}`, Name: library.Name, CollectionType: library.CollectionType }));
+      const targetName = views.find(view => view.Id === input.Id)?.Name;
+      const library = state.libraries.find(l => l.ItemId === input.Id || (targetName && l.Name === targetName));
       if (!library) return json({}, 404);
       for (const info of input.LibraryOptions.PathInfos || []) {
         if (!library.LibraryOptions?.PathInfos?.some(current => current.Path === info.Path)) library.Locations.push(info.Path);
@@ -671,6 +674,34 @@ test('duplicate cleanup refuses ambiguous Jellyfin library names before deleting
   assert.match((await response.json()).error, /nombres de biblioteca repetidos/);
   assert.equal(f.state.libraries.length, 2);
   assert.equal(f.state.requests.some(request => request.path === '/Library/VirtualFolders' && request.method === 'DELETE'), false);
+});
+
+test('duplicate cleanup uses a unique library name when Jellyfin omits ItemId and Views omits the empty library', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { Name: 'Música de Google Drive', CollectionType: 'music', Locations: ['/media/cloud/DESCARGAS/MUSICA'] },
+    { Name: 'Música de Google Drive2', CollectionType: 'music', Locations: ['/media/cloud/DESCARGAS/MUSICA'] },
+  ];
+  f.state.views = [];
+  const response = await f.request('/api/admin/libraries/duplicate', { method: 'DELETE', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música de Google Drive2' }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.state.libraries.map(library => library.Name), ['Música de Google Drive']);
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'DELETE').length, 1);
+});
+
+test('library mapping uses a unique name and the Jellyfin view ID for options when VirtualFolders omits ItemId', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ Name: 'Fotos de Google Drive', CollectionType: 'homevideos', Locations: ['/media/cloud/OLD'], LibraryOptions: { EnablePhotos: false, PathInfos: [{ Path: '/media/cloud/OLD' }] } }];
+  f.state.views = [{ Id: 'photo-view', Name: 'Fotos de Google Drive', CollectionType: 'homevideos' }];
+  const response = await f.request('/api/admin/libraries/path', {
+    method: 'POST', headers: authHeaders(session, f.config),
+    body: JSON.stringify({ name: 'Fotos de Google Drive', path: '/media/cloud/Photos', previousPaths: ['/media/cloud/OLD'], enablePhotos: true }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Photos']);
+  assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, true);
+  const optionsCall = f.state.requests.find(request => request.path === '/Library/VirtualFolders/LibraryOptions');
+  assert.equal(JSON.parse(optionsCall.body).Id, 'photo-view');
 });
 
 test('existing library mapping normalizes duplicate Jellyfin paths before replacing the root', async (t) => {

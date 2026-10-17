@@ -7,12 +7,13 @@ function response(data, status = 200) {
   return { ok: status >= 200 && status < 300, status, body: { cancel: async () => {} }, data };
 }
 
-function fixture(tasks) {
+function fixture(tasks, { refreshStatus = 204, taskListStatus = 200 } = {}) {
   const calls = [];
   const upstream = async (path, options = {}) => {
     calls.push({ path, ...options });
-    if (path === '/ScheduledTasks') return response(tasks);
+    if (path === '/ScheduledTasks') return response(tasks, taskListStatus);
     if (path === '/ScheduledTasks/Running/scan-task') return response(null, 204);
+    if (path === '/Library/Refresh') return response(null, refreshStatus);
     throw new Error('Unexpected request: ' + path);
   };
   return { calls, upstream, jsonResponse: async result => result.data };
@@ -43,10 +44,20 @@ test('does not queue a second scan when Jellyfin reports the library task is run
   assert.equal(f.calls.length, 1);
 });
 
-test('refuses to start an unrelated or ambiguous Jellyfin task', async () => {
+test('uses Jellyfin library refresh when no scheduled task can be identified safely', async () => {
   const f = fixture([{ Id: 'other-task', Key: 'RefreshPlugins', Name: 'Actualizar complementos', State: 'Idle' }]);
-  await assert.rejects(startLibraryScan({ ...f, session: {} }), error => error instanceof HttpError && error.status === 503);
-  assert.equal(f.calls.length, 1);
+  const result = await startLibraryScan({ ...f, session: {} });
+  assert.deepEqual(result, { scanRequested: true, alreadyRunning: false, taskName: 'Escanear la biblioteca' });
+  assert.deepEqual(f.calls.map(call => [call.path, call.method || 'GET']), [
+    ['/ScheduledTasks', 'GET'],
+    ['/Library/Refresh', 'POST'],
+  ]);
+});
+
+test('reports an error when both task lookup and Jellyfin library refresh are unavailable', async () => {
+  const f = fixture([], { refreshStatus: 503 });
+  await assert.rejects(startLibraryScan({ ...f, session: {} }), error => error instanceof HttpError && error.status === 502);
+  assert.deepEqual(f.calls.map(call => call.path), ['/ScheduledTasks', '/Library/Refresh']);
 });
 
 test('reports a failed Jellyfin task start instead of claiming a scan was queued', async () => {

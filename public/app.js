@@ -686,11 +686,11 @@ import { createCastControls } from './casting-sender.js';
     };
     for (const library of libraries || []) {
       const row = el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), button('Cambiar carpeta', () => editLibrary(library), 'small-button'));
-      const twins = (libraries || []).filter(other => other.ItemId !== library.ItemId && sameLibraryContent(library, other));
+      const twins = (libraries || []).filter(other => other.Name !== library.Name && sameLibraryContent(library, other));
       const keepsPhotoIndexing = library.LibraryOptions?.EnablePhotos !== true || twins.some(other => other.LibraryOptions?.EnablePhotos === true);
       if (twins.length && keepsPhotoIndexing) row.append(button('Quitar duplicado', async () => {
         if (!window.confirm(`Quitar la configuración duplicada “${library.Name}”? La otra biblioteca seguirá usando la misma carpeta y no se borrarán archivos de Drive.`)) return;
-        await api(`/api/admin/libraries/${encodeURIComponent(library.ItemId)}/duplicate`, { method: 'DELETE' });
+        await api('/api/admin/libraries/duplicate', { method: 'DELETE', body: { name: library.Name } });
         notify('Configuración duplicada retirada. Los archivos de Drive siguen intactos.'); await navigate('admin');
       }, 'small-button'));
       listing.append(row);
@@ -765,7 +765,7 @@ import { createCastControls } from './casting-sender.js';
       try { const parsed = new URL(value); driveFolderLink = parsed.origin === 'https://drive.google.com' && /^\/drive\/folders\/[A-Za-z0-9_-]{10,200}\/?$/.test(parsed.pathname) && !parsed.username && !parsed.password && !parsed.hash; } catch {}
       if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !driveFolderLink) throw new Error('Introduce una ruta absoluta del servidor o un enlace válido de carpeta de Google Drive.');
       if (editingLibrary) {
-        const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [], enablePhotos: enablePhotos.checked } });
+        const result = await api('/api/admin/libraries/path', { method: 'POST', body: { name: editingLibrary.Name, path: value, previousPaths: editingLibrary.Locations || [], enablePhotos: enablePhotos.checked } });
         notify(result.scanError ? `Carpeta actualizada, pero no se inició la exploración: ${result.scanError}` : result.alreadyRunning ? `Carpeta actualizada. Jellyfin ya está explorando la biblioteca${Number.isFinite(result.progress) ? ` (${Math.round(result.progress)}%).` : '.'}` : 'Carpeta actualizada. Jellyfin inició la exploración de la biblioteca.');
         await navigate('admin'); return;
       }
@@ -776,7 +776,7 @@ import { createCastControls } from './casting-sender.js';
     }); });
     const editLibrary = async library => {
       editingLibrary = library; name.value = library.Name; name.disabled = true; type.disabled = true;
-      type.value = library.LibraryOptions?.EnablePhotos ? 'photos' : (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+      type.value = library.LibraryOptions?.EnablePhotos ? 'photos' : library.CollectionType || (views.Items || []).find(view => view.Name === library.Name)?.CollectionType || '';
       enablePhotosLabel.hidden = false; enablePhotos.checked = !!library.LibraryOptions?.EnablePhotos || /foto|photo|imagen|image/i.test(library.Name || '');
       path.value = library.Locations?.[0] || '';
       source.value = path.value.startsWith('/media/cloud') ? 'cloud' : 'local';
