@@ -11,7 +11,7 @@ function fixture(tasks) {
   const calls = [];
   const upstream = async (path, options = {}) => {
     calls.push({ path, ...options });
-    if (path === '/ScheduledTasks?isHidden=false&isEnabled=true') return response(tasks);
+    if (path === '/ScheduledTasks') return response(tasks);
     if (path === '/ScheduledTasks/Running/scan-task') return response(null, 204);
     throw new Error('Unexpected request: ' + path);
   };
@@ -23,9 +23,17 @@ test('starts the stable RefreshMediaLibraryTask and reports that the scan was qu
   const result = await startLibraryScan({ ...f, session: { user: { Policy: { IsAdministrator: true } } } });
   assert.deepEqual(result, { scanRequested: true, alreadyRunning: false, taskName: 'Escanear la biblioteca' });
   assert.deepEqual(f.calls.map(call => [call.path, call.method || 'GET']), [
-    ['/ScheduledTasks?isHidden=false&isEnabled=true', 'GET'],
+    ['/ScheduledTasks', 'GET'],
     ['/ScheduledTasks/Running/scan-task', 'POST'],
   ]);
+});
+
+test('finds the explicit library refresh task when Jellyfin hides it from filtered task listings', async () => {
+  const f = fixture([{ Id: 'scan-task', Key: 'Jellyfin.RefreshMediaLibraryTask', Name: 'Escanear la biblioteca', IsHidden: true, IsEnabled: false, State: 'Idle' }]);
+  const result = await startLibraryScan({ ...f, session: {} });
+  assert.deepEqual(result, { scanRequested: true, alreadyRunning: false, taskName: 'Escanear la biblioteca' });
+  assert.equal(f.calls[0].path, '/ScheduledTasks');
+  assert.equal(f.calls[1].path, '/ScheduledTasks/Running/scan-task');
 });
 
 test('does not queue a second scan when Jellyfin reports the library task is running', async () => {
@@ -45,7 +53,7 @@ test('reports a failed Jellyfin task start instead of claiming a scan was queued
   const f = fixture([{ Id: 'scan-task', Key: 'RefreshMediaLibraryTask', Name: 'Scan Media Library', State: 'Idle' }]);
   f.upstream = async (path, options = {}) => {
     f.calls.push({ path, ...options });
-    if (path === '/ScheduledTasks?isHidden=false&isEnabled=true') return response([{ Id: 'scan-task', Key: 'RefreshMediaLibraryTask', Name: 'Scan Media Library', State: 'Idle' }]);
+    if (path === '/ScheduledTasks') return response([{ Id: 'scan-task', Key: 'RefreshMediaLibraryTask', Name: 'Scan Media Library', State: 'Idle' }]);
     if (path === '/ScheduledTasks/Running/scan-task') return response(null, 500);
     throw new Error('Unexpected request: ' + path);
   };
@@ -56,7 +64,7 @@ test('treats a concurrent start conflict as success only after confirming Jellyf
   const calls = [];
   const upstream = async (path, options = {}) => {
     calls.push({ path, ...options });
-    if (path === '/ScheduledTasks?isHidden=false&isEnabled=true') {
+    if (path === '/ScheduledTasks') {
       const state = calls.filter(call => call.path === path).length === 1 ? 'Idle' : 'Running';
       return response([{ Id: 'scan-task', Key: 'RefreshMediaLibraryTask', Name: 'Scan Media Library', State: state, CurrentProgressPercentage: 33 }]);
     }
