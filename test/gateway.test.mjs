@@ -55,16 +55,27 @@ async function fixture(t, overrides = {}, options = {}) {
       const input = raw ? JSON.parse(raw) : {};
       const library = state.libraries.find(l => l.Name === (input.Name || url.searchParams.get('name')));
       if (!library) return json({}, 404);
-      if (req.method === 'POST') library.Locations = [...new Set([...library.Locations, input.PathInfo.Path])];
+      library.LibraryOptions ||= {};
+      library.LibraryOptions.PathInfos ||= [];
+      if (req.method === 'POST') {
+        library.Locations.push(input.PathInfo.Path);
+        library.LibraryOptions.PathInfos.push(input.PathInfo);
+      }
       else {
         if (state.failRemovePath) { state.failRemovePath = false; return json({}, 500); }
-        library.Locations = library.Locations.filter(p => p !== url.searchParams.get('path'));
+        const path = url.searchParams.get('path'); const index = library.Locations.indexOf(path);
+        if (index >= 0) library.Locations.splice(index, 1);
+        library.LibraryOptions.PathInfos = library.LibraryOptions.PathInfos.filter(info => info.Path !== path);
       }
       res.writeHead(204); return res.end();
     }
     if (url.pathname === '/Library/VirtualFolders/LibraryOptions' && req.method === 'POST') {
       const input = raw ? JSON.parse(raw) : {}; const library = state.libraries.find(l => l.ItemId === input.Id);
-      if (!library) return json({}, 404); library.LibraryOptions = input.LibraryOptions; return json({ ok: true });
+      if (!library) return json({}, 404);
+      for (const info of input.LibraryOptions.PathInfos || []) {
+        if (!library.LibraryOptions?.PathInfos?.some(current => current.Path === info.Path)) library.Locations.push(info.Path);
+      }
+      library.LibraryOptions = input.LibraryOptions; return json({ ok: true });
     }
     if (url.pathname === '/Library/Refresh') { res.writeHead(204); return res.end(); }
     return json({ ok: true });
@@ -512,6 +523,7 @@ test('existing library mapping normalizes duplicate Jellyfin paths before replac
   assert.equal(response.status, 200);
   assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Videos']);
   assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, false);
+  assert.deepEqual(f.state.libraries[0].LibraryOptions.PathInfos.map(info => info.Path), ['/media/cloud/Videos'], 'photo option update must not recreate the old Drive root');
 });
 
 test('mapping rejects a new library path nested inside another library', async (t) => {
