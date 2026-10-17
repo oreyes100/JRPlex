@@ -8,7 +8,7 @@ import { torrentInput } from '../lib/torrents.mjs';
 
 async function start(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t, overrides = {}, options = {}) {
-  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0 };
+  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0, libraryCreateDelay: 0, libraryRefreshDelay: 0, dropLibraryCreateResponse: false };
   const user = () => ({ Id: 'alice', Name: 'Alice', Policy: { IsAdministrator: state.admin, IsDisabled: state.disabled } });
   const media = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -51,6 +51,22 @@ async function fixture(t, overrides = {}, options = {}) {
     }
     if (url.pathname === '/Users') return json([user()]);
     if (url.pathname === '/Library/VirtualFolders' && req.method === 'GET') return json(state.libraries);
+    if (url.pathname === '/Library/VirtualFolders' && req.method === 'POST') {
+      const input = raw ? JSON.parse(raw) : {};
+      const name = url.searchParams.get('name');
+      const paths = input.LibraryOptions?.PathInfos || [];
+      if (!name || !paths.length) return json({}, 400);
+      if (state.libraryCreateDelay) await new Promise(resolve => setTimeout(resolve, state.libraryCreateDelay));
+      state.libraries.push({ ItemId: `library-${state.libraries.length + 1}`, Name: name, CollectionType: url.searchParams.get('collectionType') || '', Locations: paths.map(info => info.Path), LibraryOptions: input.LibraryOptions });
+      if (state.dropLibraryCreateResponse) { state.dropLibraryCreateResponse = false; res.destroy(); return; }
+      return json({ ok: true });
+    }
+    if (url.pathname === '/Library/VirtualFolders' && req.method === 'DELETE') {
+      const name = url.searchParams.get('name');
+      const index = state.libraries.findIndex(library => library.Name === name);
+      if (index < 0) return json({}, 404);
+      state.libraries.splice(index, 1); return json({ ok: true });
+    }
     if (url.pathname === '/Library/VirtualFolders/Paths') {
       const input = raw ? JSON.parse(raw) : {};
       const library = state.libraries.find(l => l.Name === (input.Name || url.searchParams.get('name')));
@@ -77,7 +93,7 @@ async function fixture(t, overrides = {}, options = {}) {
       }
       library.LibraryOptions = input.LibraryOptions; return json({ ok: true });
     }
-    if (url.pathname === '/Library/Refresh') { res.writeHead(204); return res.end(); }
+    if (url.pathname === '/Library/Refresh') { if (state.libraryRefreshDelay) await new Promise(resolve => setTimeout(resolve, state.libraryRefreshDelay)); res.writeHead(204); return res.end(); }
     return json({ ok: true });
   });
   const upstream = await start(media);
@@ -144,10 +160,13 @@ test('admins can browse Drive folders and save a shared Google folder link as a 
   assert.equal(mapped.status, 200);
   assert.equal((await mapped.json()).path, '/media/cloud/Series/South Park');
   assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Series/South Park']);
-  const created = await f.request('/jellyfin/Library/VirtualFolders?name=South%20Park&collectionType=movies&refreshLibrary=false', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ LibraryOptions: { PathInfos: [{ Path: driveLink }] } }) });
-  assert.equal(created.status, 200);
+  f.state.libraries = [];
+  const created = await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'South Park', path: driveLink, collectionType: 'movies' }) });
+  assert.equal(created.status, 201);
   const createRequest = f.state.requests.find(request => request.path === '/Library/VirtualFolders' && request.method === 'POST');
   assert.equal(JSON.parse(createRequest.body).LibraryOptions.PathInfos[0].Path, '/media/cloud/Series/South Park');
+  assert.equal((await f.request('/jellyfin/Library/VirtualFolders?name=Unsafe&collectionType=movies', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ LibraryOptions: { PathInfos: [{ Path: '/media/cloud/Unsafe' }] } }) })).status, 403, 'direct Jellyfin mutations cannot bypass idempotent library management');
+  assert.equal((await f.request('/jellyfin/Library/VirtualFolders/LibraryOptions', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ Name: 'Películas', LibraryOptions: { PathInfos: [{ Path: '/media/cloud/Unsafe' }] } }) })).status, 403, 'direct library option mutations cannot bypass path validation or the mutation lock');
   const viewer = { ...session, cookie: session.cookie };
   f.state.admin = false;
   const denied = await f.request('/api/admin/google-drive/folders', { headers: { Cookie: viewer.cookie } });
@@ -513,6 +532,116 @@ test('existing library mapping replaces the root with the chosen folder while ke
   assert.equal(f.state.requests.some(r => r.path === '/Items/drive' && r.method === 'DELETE'), false, 'no library or media deletion');
 });
 
+test('new library creation is idempotent after a client timeout and refresh runs in the background', async t => {
+  const f = await fixture(t); const session = await f.login(); f.state.libraryRefreshDelay = 500;
+  const create = () => f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música de Google Drive', path: '/media/cloud/MUSICA', collectionType: 'music' }) });
+  const startedAt = Date.now();
+  const first = await create();
+  assert.ok(Date.now() - startedAt < 400, 'library creation does not wait for the slower scan request');
+  assert.equal(first.status, 201);
+  assert.equal((await first.json()).created, true);
+  const retry = await create();
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).created, false);
+  assert.equal(f.state.libraries.length, 1);
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'POST').length, 1);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 1, 'a background scan was queued');
+  assert.equal((await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música de Google Drive', path: '/media/cloud/OTRA', collectionType: 'music' }) })).status, 409);
+  await new Promise(resolve => setTimeout(resolve, 520));
+  const later = await create();
+  assert.equal(later.status, 200);
+  assert.equal((await later.json()).scanRequested, true, 'a completed scan does not suppress future refreshes');
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 2);
+});
+
+test('library retry after Jellyfin commits but drops its response returns the existing mapping', async t => {
+  const f = await fixture(t); const session = await f.login(); f.state.dropLibraryCreateResponse = true;
+  const create = () => f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Videos', path: '/media/cloud/Videos', collectionType: 'movies' }) });
+  const interrupted = await create();
+  assert.equal(interrupted.status, 502);
+  assert.equal(f.state.libraries.length, 1, 'Jellyfin committed the configuration before dropping the response');
+  const retry = await create();
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).created, false);
+  assert.equal(f.state.libraries.length, 1);
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'POST').length, 1);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 1, 'the retry queued one scan after Jellyfin dropped the creation response');
+});
+
+test('new library creation resolves a pasted Google Drive folder link before registration', async t => {
+  const resolved = [];
+  const googleOAuth = { resolveFolderUrl: async value => { resolved.push(value); return '/media/cloud/Descargas/Música'; } };
+  const f = await fixture(t, {}, { googleOAuth }); const session = await f.login();
+  const link = 'https://drive.google.com/drive/folders/1aBcDeFgHiJkLmNoPqRsTu?hl=es-419';
+  const response = await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música', path: link, collectionType: 'music' }) });
+  assert.equal(response.status, 201);
+  assert.deepEqual(resolved, [link]);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Descargas/Música']);
+});
+
+test('concurrent retries cannot create duplicate libraries and the route requires admin plus CSRF', async t => {
+  const f = await fixture(t); const session = await f.login(); f.state.libraryCreateDelay = 75;
+  const payload = JSON.stringify({ name: 'Videos', path: '/media/cloud/Videos', collectionType: 'movies' });
+  const create = () => f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: payload });
+  const firstRequest = create();
+  await new Promise(resolve => setTimeout(resolve, 15));
+  const secondResponse = await create();
+  assert.equal(secondResponse.status, 409);
+  assert.match((await secondResponse.json()).error, /configuración de bibliotecas está en curso/);
+  assert.equal((await firstRequest).status, 201);
+  assert.equal(f.state.libraries.length, 1);
+  assert.equal((await f.request('/api/admin/libraries', { method: 'POST', headers: { Cookie: session.cookie, Origin: f.config.publicUrl, 'Content-Type': 'application/json' }, body: payload })).status, 403);
+  f.state.admin = false;
+  assert.equal((await create()).status, 403);
+});
+
+test('new libraries reject overlapping roots and keep photo indexing enabled', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [{ ItemId: 'movies', Name: 'Movies', CollectionType: 'movies', Locations: ['/media/cloud/Media'] }];
+  const overlap = await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Photos', path: '/media/cloud/Media/Photos', collectionType: 'photos' }) });
+  assert.equal(overlap.status, 409);
+  assert.match((await overlap.json()).error, /se superpone con otra biblioteca/);
+  assert.equal(f.state.libraries.length, 1);
+  f.state.libraries = [];
+  const photos = await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Fotos', path: '/media/cloud/Photos', collectionType: 'photos' }) });
+  assert.equal(photos.status, 201);
+  assert.equal(f.state.libraries[0].CollectionType, 'homevideos');
+  assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, true);
+});
+
+test('duplicate cleanup removes only a library with an exact path and media-type twin', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { ItemId: 'music-one', Name: 'Music', CollectionType: 'music', Locations: ['/media/cloud/Music'] },
+    { ItemId: 'music-two', Name: 'Music2', CollectionType: 'music', Locations: ['/media/cloud/Music'] },
+    { ItemId: 'mixed', Name: 'Mixed', CollectionType: 'homevideos', Locations: ['/media/cloud/Music'] },
+    { ItemId: 'photos', Name: 'Photos', CollectionType: 'homevideos', Locations: ['/media/cloud/Photos'], LibraryOptions: { EnablePhotos: true } },
+  ];
+  const remove = id => f.request(`/api/admin/libraries/${id}/duplicate`, { method: 'DELETE', headers: authHeaders(session, f.config) });
+  assert.equal((await remove('music-two')).status, 200);
+  assert.deepEqual(f.state.libraries.map(library => library.ItemId), ['music-one', 'mixed', 'photos']);
+  assert.equal((await remove('mixed')).status, 409, 'a same-path library with another collection type is not a duplicate');
+  assert.equal((await remove('photos')).status, 409, 'a unique library cannot be removed as a duplicate');
+  assert.equal((await remove('music-one')).status, 409, 'the remaining unique library cannot be removed as a duplicate');
+  assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'DELETE').length, 1);
+});
+
+test('duplicate cleanup refuses ambiguous Jellyfin library names before deleting by name', async t => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { ItemId: 'music-one', Name: 'Music', CollectionType: 'music', Locations: ['/media/cloud/Music'] },
+    { ItemId: 'music-two', Name: 'Music', CollectionType: 'music', Locations: ['/media/cloud/Music'] },
+  ];
+  const response = await f.request('/api/admin/libraries/music-two/duplicate', { method: 'DELETE', headers: authHeaders(session, f.config) });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /nombres de biblioteca repetidos/);
+  assert.equal(f.state.libraries.length, 2);
+  assert.equal(f.state.requests.some(request => request.path === '/Library/VirtualFolders' && request.method === 'DELETE'), false);
+});
+
 test('existing library mapping normalizes duplicate Jellyfin paths before replacing the root', async (t) => {
   const f = await fixture(t); const session = await f.login();
   f.state.libraries = [
@@ -577,8 +706,8 @@ test('remapping can disable photo indexing on a general library', async t => {
 
 test('photograph mapping uses the collection type accepted by Jellyfin 12 and enables photo indexing', async (t) => {
   const f = await fixture(t); const session = await f.login();
-  const response = await f.request('/jellyfin/Library/VirtualFolders?name=Photos&collectionType=photos&refreshLibrary=true', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ LibraryOptions: { PathInfos: [{ Path: '/media/cloud/Photos' }] } }) });
-  assert.equal(response.status, 200);
+  const response = await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Photos', path: '/media/cloud/Photos', collectionType: 'photos' }) });
+  assert.equal(response.status, 201);
   const upstream = f.state.requests.find(r => r.path === '/Library/VirtualFolders' && r.method === 'POST');
   assert.equal(upstream.query.get('collectionType'), 'homevideos');
   assert.equal(JSON.parse(upstream.body).LibraryOptions.EnablePhotos, true);

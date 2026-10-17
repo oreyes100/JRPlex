@@ -6,6 +6,7 @@ import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HttpError, loadConfig, opaque, equal, safePath, cleanQuery, sanitizeJson, rewritePlaylist, boundedBody, requireStrongPassword, normalizeIp } from './lib/security.mjs';
 import { mediaFolderPath, replaceLibraryPath } from './lib/library-mapping.mjs';
+import { createLibrary, removeDuplicateLibrary } from './lib/library-management.mjs';
 import { createTorrentClient } from './lib/torrents.mjs';
 import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
@@ -24,6 +25,9 @@ export function createApp(config = loadConfig(), options = {}) {
   function dropSession(id) { sessions.delete(id); casting?.revokeSession(id); tvAccess?.revokeSession(id); }
   const attempts = new Map();
   const mappingOperations = new Set();
+  const libraryCreationOperations = new Set();
+  const libraryScansQueued = new Set();
+  let libraryStructureBusy = false;
   const torrent = options.torrentClient || createTorrentClient(config);
   const googleOAuth = options.googleOAuth || createGoogleDriveOAuth(config, { projectRoot });
   const cloudMountStatus = options.cloudMountStatus || (async () => {
@@ -97,6 +101,11 @@ export function createApp(config = loadConfig(), options = {}) {
     return user;
   }
   async function requireAdmin(session) { const user = await currentUser(session); if (!user.Policy?.IsAdministrator) throw new HttpError(403, 'Administrator required'); return user; }
+  async function withLibraryStructureLock(operation) {
+    if (libraryStructureBusy) throw new HttpError(409, 'La configuración de bibliotecas está en curso. Espera a que termine e inténtalo de nuevo.');
+    libraryStructureBusy = true;
+    try { return await operation(); } finally { libraryStructureBusy = false; }
+  }
   function isDriveFolderLink(value) {
     if (typeof value !== 'string') return false;
     try { const url = new URL(value); return url.origin === 'https://drive.google.com' && url.pathname.startsWith('/drive/folders/'); } catch { return false; }
@@ -120,8 +129,7 @@ export function createApp(config = loadConfig(), options = {}) {
     if (path === '/Users/New' && method === 'POST') return 'admin';
     if (new RegExp(`^/Users/${id}/(?:Policy|Password)$`).test(path) && method === 'POST') return 'admin';
     if (new RegExp(`^/Users/${id}$`).test(path) && method === 'DELETE') return 'admin';
-    if (path === '/Library/VirtualFolders' && ['GET', 'POST', 'DELETE'].includes(method)) return 'admin';
-    if (path === '/Library/VirtualFolders/LibraryOptions' && method === 'POST') return 'admin';
+    if (path === '/Library/VirtualFolders' && method === 'GET') return 'admin';
     if (path === '/Library/Refresh' && method === 'POST') return 'admin';
     if (path === '/Users/Me' && method === 'GET') return 'user';
     if (path === '/UserItems/Resume' && ['GET', 'HEAD'].includes(method)) return 'user';
@@ -156,19 +164,6 @@ export function createApp(config = loadConfig(), options = {}) {
     if (mutation(req.method)) {
       csrf(req, session);
       const parsed = await body(req);
-      if (path === '/Library/VirtualFolders' && req.method === 'POST' && Array.isArray(parsed.LibraryOptions?.PathInfos)) {
-        for (const info of parsed.LibraryOptions.PathInfos) {
-          if (!isDriveFolderLink(info?.Path)) continue;
-          info.Path = await resolveLibraryPath(info.Path);
-          const check = await upstream('/Environment/DirectoryContents?' + new URLSearchParams({ path: info.Path, includeFiles: 'false', includeDirectories: 'true' }), { session });
-          await check.body?.cancel();
-          if (!check.ok) throw new HttpError(400, 'Jellyfin no puede leer esa carpeta de Drive en el servidor. Selecciónala desde el explorador de carpetas.');
-        }
-      }
-      if (path === '/Library/VirtualFolders' && req.method === 'POST' && url.searchParams.get('collectionType') === 'photos') {
-        url.searchParams.set('collectionType', 'homevideos');
-        parsed.LibraryOptions = { ...parsed.LibraryOptions, EnablePhotos: true };
-      }
       if (path === '/Users/New') {
         requireStrongPassword(parsed.Password);
         if (typeof parsed.Name !== 'string' || !parsed.Name.trim() || parsed.Name.length > 64) throw new HttpError(400, 'A user name of at most 64 characters is required');
@@ -303,12 +298,27 @@ export function createApp(config = loadConfig(), options = {}) {
         }
         if (route.startsWith('/api/admin/')) {
           await requireAdmin(session);
+          if (route === '/api/admin/libraries' && req.method === 'POST') {
+            const input = await body(req);
+            const result = await withLibraryStructureLock(() => createLibrary({ input, session, upstream, jsonResponse, resolvePath: resolveLibraryPath, operations: libraryCreationOperations, scansQueued: libraryScansQueued }));
+            send(res, result.created ? 201 : 200, result);
+            return;
+          }
           const mappingMatch = route.match(/^\/api\/admin\/libraries\/([A-Za-z0-9_-]{1,128})\/path$/);
           if (mappingMatch && req.method === 'POST') {
             const input = await body(req); const id = mappingMatch[1];
             if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca ya está guardando una ruta.');
             mappingOperations.add(id);
-            try { send(res, 200, await replaceLibraryPath({ id, input: { ...input, path: await resolveLibraryPath(input.path) }, session, upstream, jsonResponse })); }
+            try { send(res, 200, await withLibraryStructureLock(async () => replaceLibraryPath({ id, input: { ...input, path: await resolveLibraryPath(input.path) }, session, upstream, jsonResponse }))); }
+            finally { mappingOperations.delete(id); }
+            return;
+          }
+          const duplicateMatch = route.match(/^\/api\/admin\/libraries\/([A-Za-z0-9_-]{1,128})\/duplicate$/);
+          if (duplicateMatch && req.method === 'DELETE') {
+            const id = duplicateMatch[1];
+            if (mappingOperations.has(id)) throw new HttpError(409, 'Esta biblioteca está cambiando de ruta.');
+            mappingOperations.add(id);
+            try { send(res, 200, await withLibraryStructureLock(() => removeDuplicateLibrary({ id, session, upstream, jsonResponse }))); }
             finally { mappingOperations.delete(id); }
             return;
           }

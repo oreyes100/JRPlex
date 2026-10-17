@@ -665,7 +665,22 @@ import { createCastControls } from './casting-sender.js';
     const [libraries, views] = await Promise.all([api('/jellyfin/Library/VirtualFolders'), api(`/jellyfin/Users/${state.session.user.Id}/Views`)]); if (generation !== state.generation) return;
     let editingLibrary = null;
     const listing = panel('Bibliotecas del servidor');
-    for (const library of libraries || []) listing.append(el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), button('Cambiar carpeta', () => editLibrary(library), 'small-button')));
+    const libraryType = library => library.LibraryOptions?.EnablePhotos === true ? 'photos' : library.CollectionType || (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
+    const sameLibraryContent = (left, right) => {
+      const normalizePath = value => typeof value === 'string' ? value.replace(/\/+$/, '') : '';
+      const leftPaths = Array.isArray(left.Locations) ? left.Locations.map(normalizePath).sort() : [];
+      const rightPaths = Array.isArray(right.Locations) ? right.Locations.map(normalizePath).sort() : [];
+      return leftPaths.length > 0 && leftPaths.length === rightPaths.length && JSON.stringify(leftPaths) === JSON.stringify(rightPaths) && libraryType(left) === libraryType(right);
+    };
+    for (const library of libraries || []) {
+      const row = el('div', { class: 'list-row' }, el('div', { class: 'row-copy' }, library.Name || 'Biblioteca', el('small', {}, (library.Locations || []).join(' · ') || 'Sin ruta declarada')), button('Cambiar carpeta', () => editLibrary(library), 'small-button'));
+      if ((libraries || []).some(other => other.ItemId !== library.ItemId && sameLibraryContent(library, other))) row.append(button('Quitar duplicado', async () => {
+        if (!window.confirm(`Quitar la configuración duplicada “${library.Name}”? La otra biblioteca seguirá usando la misma carpeta y no se borrarán archivos de Drive.`)) return;
+        await api(`/api/admin/libraries/${encodeURIComponent(library.ItemId)}/duplicate`, { method: 'DELETE' });
+        notify('Configuración duplicada retirada. Los archivos de Drive siguen intactos.'); await navigate('admin');
+      }, 'small-button'));
+      listing.append(row);
+    }
     if (!libraries?.length) listing.append(el('p', {}, 'Todavía no hay bibliotecas configuradas.'));
     listing.append(button('Buscar contenido nuevo', async () => { await api('/jellyfin/Library/Refresh', { method: 'POST' }); notify('Exploración solicitada al servidor.'); }, 'small-button'));
     const form = el('form', { class: 'stack' }); const name = inputField(form, 'Nombre de la biblioteca', { required: true, maxLength: 80 });
@@ -691,7 +706,7 @@ import { createCastControls } from './casting-sender.js';
         try { listing = await api(`/api/admin/google-drive/folders?${query}`); }
         catch (error) { if (request === folderRequest) { folderStatus.textContent = error.message; folderList.replaceChildren(); } throw error; }
         if (request !== folderRequest || generation !== state.generation) return;
-        currentAbsolute = selected ? `https://drive.google.com/drive/folders/${selected.id}` : '/media/cloud';
+        currentAbsolute = selected ? `/media/cloud/${driveStack.map(folder => folder.name).join('/')}` : '/media/cloud';
         useFolder.disabled = false;
         folderStatus.textContent = selected ? `Carpeta actual: ${driveStack.map(folder => folder.name).join(' / ')} · ${currentAbsolute}` : 'Carpeta actual: Mi unidad · /media/cloud';
         folderBreadcrumbs.replaceChildren(button('Mi unidad', async () => { driveStack = []; driveNextPageToken = null; await loadFolders(); }, 'small-button'));
@@ -737,10 +752,9 @@ import { createCastControls } from './casting-sender.js';
         notify(result.scanRequested ? 'Carpeta actualizada. Esta biblioteca usará únicamente la ruta elegida al terminar la exploración.' : 'Carpeta guardada. Pulsa Buscar contenido nuevo para solicitar la exploración.');
         await navigate('admin'); return;
       }
-      const query = new URLSearchParams({ name: name.value.trim(), refreshLibrary: 'false' }); if (type.value) query.set('collectionType', type.value === 'photos' ? 'homevideos' : type.value);
-      await api(`/jellyfin/Library/VirtualFolders?${query}`, { method: 'POST', body: { LibraryOptions: { PathInfos: [{ Path: value }], ...(type.value === 'photos' ? { EnablePhotos: true } : {}), EnableRealtimeMonitor: false, SaveLocalMetadata: false } } });
-      await api('/jellyfin/Library/Refresh', { method: 'POST', body: {} });
-      notify('Biblioteca añadida. El contenido aparecerá tras la exploración.'); await navigate('admin');
+      const result = await api('/api/admin/libraries', { method: 'POST', body: { name: name.value.trim(), path: value, collectionType: type.value }, signal: AbortSignal.timeout(100000) });
+      notify(result.created ? 'Biblioteca añadida. La exploración quedó en segundo plano.' : `Esta carpeta ya estaba mapeada como “${result.name}”. ${result.scanRequested ? 'Se pidió una exploración en segundo plano.' : 'No se creó un duplicado.'}`);
+      await navigate('admin');
     }); });
     const editLibrary = async library => {
       editingLibrary = library; name.value = library.Name; name.disabled = true; type.disabled = true;
