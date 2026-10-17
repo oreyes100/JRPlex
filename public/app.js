@@ -676,7 +676,6 @@ import { createCastControls } from './casting-sender.js';
     const libraryType = library => {
       const collectionType = library.CollectionType || (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
       if (collectionType && collectionType !== 'homevideos') return collectionType;
-      if (collectionType === 'homevideos' && library.LibraryOptions?.EnablePhotos === true) return 'photos';
       return namedLibraryType(library.Name) || (library.LibraryOptions?.EnablePhotos === true ? 'photos' : collectionType);
     };
     const sameLibraryContent = (left, right) => {
