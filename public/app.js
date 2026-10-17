@@ -665,9 +665,19 @@ import { createCastControls } from './casting-sender.js';
     const [libraries, views] = await Promise.all([api('/jellyfin/Library/VirtualFolders'), api(`/jellyfin/Users/${state.session.user.Id}/Views`)]); if (generation !== state.generation) return;
     let editingLibrary = null;
     const listing = panel('Bibliotecas del servidor');
+    const namedLibraryType = name => {
+      const value = typeof name === 'string' ? name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase() : '';
+      if (/\b(fotos?|photos?|imagenes?|images?)\b/.test(value)) return 'photos';
+      if (/\b(musica|music|audio)\b/.test(value)) return 'music';
+      if (/\b(series|tv|television|shows)\b/.test(value)) return 'tvshows';
+      if (/\b(peliculas?|movies|films?)\b/.test(value)) return 'movies';
+      return '';
+    };
     const libraryType = library => {
       const collectionType = library.CollectionType || (views.Items || []).find(view => view.Id === library.ItemId || view.Name === library.Name)?.CollectionType || '';
-      return collectionType && collectionType !== 'homevideos' ? collectionType : library.LibraryOptions?.EnablePhotos === true ? 'photos' : collectionType;
+      if (collectionType && collectionType !== 'homevideos') return collectionType;
+      if (collectionType === 'homevideos' && library.LibraryOptions?.EnablePhotos === true) return 'photos';
+      return namedLibraryType(library.Name) || (library.LibraryOptions?.EnablePhotos === true ? 'photos' : collectionType);
     };
     const sameLibraryContent = (left, right) => {
       const normalizePath = value => typeof value === 'string' ? value.replace(/\/+$/, '') : '';

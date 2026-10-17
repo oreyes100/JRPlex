@@ -651,8 +651,8 @@ test('duplicate cleanup removes only a library with an exact path and media-type
 test('duplicate cleanup recognizes music libraries with different photo flags and preserves the photo index', async t => {
   const f = await fixture(t); const session = await f.login();
   f.state.libraries = [
-    { ItemId: 'music-photos', Name: 'Música de Google Drive', CollectionType: 'music', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: true } },
-    { ItemId: 'music-copy', Name: 'Música de Google Drive2', CollectionType: 'music', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: false } },
+    { ItemId: 'music-photos', Name: 'Música de Google Drive', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: true } },
+    { ItemId: 'music-copy', Name: 'Música de Google Drive2', Locations: ['/media/cloud/MUSICA'], LibraryOptions: { EnablePhotos: false } },
   ];
   const remove = id => f.request(`/api/admin/libraries/${id}/duplicate`, { method: 'DELETE', headers: authHeaders(session, f.config) });
   assert.equal((await remove('music-photos')).status, 409, 'do not remove the only configuration indexing photos');
