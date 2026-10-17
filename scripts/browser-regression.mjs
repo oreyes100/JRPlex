@@ -120,6 +120,13 @@ try {
   await page.getByRole('button',{name:'Test album',exact:true}).waitFor();
   assert.equal(recursiveCatalogueQueries,0,'music category opens the selected library root rather than scanning the server');
   assert.equal(lastLibraryQuery.get('Recursive'),'false');assert.equal(lastLibraryQuery.get('Limit'),'20');assert.match(lastLibraryQuery.get('IncludeItemTypes'),/MusicAlbum|Audio/);
+  const customLibrary=libraries.find(l=>l.CollectionType==='movies');customLibrary.CollectionType='';customLibrary.Name='Medios personales';
+  await page.locator('[data-view=series]').click();
+  await page.getByRole('button',{name:'▰ Medios personales',exact:true}).waitFor();
+  await page.getByRole('button',{name:'▰ Medios personales',exact:true}).click();
+  await page.getByRole('heading',{name:'Carpetas',exact:true}).waitFor();
+  assert.equal(lastLibraryQuery.get('Recursive'),'false');assert.match(lastLibraryQuery.get('IncludeItemTypes'),/Episode/,'untyped roots receive the selected category filter');
+  customLibrary.CollectionType='movies';customLibrary.Name='Películas de Google Drive';
   await page.setViewportSize({width:390,height:844});
   const photoBox=await page.locator('[data-view=photos]').boundingBox();
   assert.ok(photoBox.x>=0&&photoBox.x+photoBox.width<=390,'Photos stays within the mobile viewport');

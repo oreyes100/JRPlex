@@ -5,7 +5,7 @@ import { createCastControls } from './casting-sender.js';
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name', folderSort: 'origin', pendingLibraryId: null };
+  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name', folderSort: 'origin', pendingLibraryId: null, pendingCollectionType: null };
   const cloudReturn = new URLSearchParams(window.location.search).get('cloud');
   if (['google-linked', 'google-error', 'google-cancelled'].includes(cloudReturn)) window.history.replaceState(null, '', window.location.pathname);
   let toastTimer; let playIntent = 0;
@@ -188,7 +188,12 @@ import { createCastControls } from './casting-sender.js';
     const [label, collectionType, namePattern] = names[category];
     const response = await api(`/jellyfin/Users/${userId}/Views`, { signal: AbortSignal.timeout(12000) });
     if (generation !== state.generation) return;
-    const libraries = (response?.Items || []).filter(view => validId(view?.Id) && (String(view.CollectionType || '').toLowerCase() === collectionType || namePattern.test(view.Name || '')));
+    const allLibraries = (response?.Items || []).filter(view => validId(view?.Id));
+    let libraries = allLibraries.filter(view => String(view.CollectionType || '').toLowerCase() === collectionType || namePattern.test(view.Name || ''));
+    if (!libraries.length) {
+      const knownTypes = new Set(['movies', 'movie', 'tvshows', 'tvshow', 'music', 'photos', 'homevideos']);
+      libraries = allLibraries.filter(view => !knownTypes.has(String(view.CollectionType || '').toLowerCase()) && !Object.values(names).some(([, , pattern]) => pattern.test(view.Name || '')));
+    }
     const content = $('content'); content.replaceChildren(title(label, 'Elige una biblioteca para abrir sus carpetas y títulos sin escanear todo el servidor.'));
     if (isAdministrator()) content.append(button(`Seleccionar carpeta de ${label.toLowerCase()} de Google Drive`, () => openDriveMapping(collectionType), 'primary'));
     if (!libraries.length) {
@@ -196,7 +201,7 @@ import { createCastControls } from './casting-sender.js';
       return;
     }
     const list = el('div', { class: 'folder-library-list', role: 'group', 'aria-label': `Bibliotecas de ${label.toLowerCase()}` });
-    for (const library of libraries) list.append(button(`▰ ${library.Name || label}`, () => { state.pendingLibraryId = library.Id; return renderFolders(generation); }, 'folder-card'));
+    for (const library of libraries) list.append(button(`▰ ${library.Name || label}`, () => { state.pendingLibraryId = library.Id; state.pendingCollectionType = library.CollectionType || collectionType; return renderFolders(generation); }, 'folder-card'));
     content.append(list);
   }
   async function renderFolders(generation) {
@@ -261,7 +266,8 @@ import { createCastControls } from './casting-sender.js';
       if (!items.length && !total && startIndex === 0) target.append(empty(search ? 'Sin coincidencias' : 'Esta carpeta está vacía', search ? 'Prueba otro nombre de carpeta o archivo.' : 'Esta ubicación no contiene carpetas ni archivos indexados.'));
     };
     const selected = libraries.find(library => library.Id === state.pendingLibraryId);
-    state.pendingLibraryId = null;
+    if (selected && state.pendingCollectionType) selected.CollectionType = state.pendingCollectionType;
+    state.pendingLibraryId = null; state.pendingCollectionType = null;
     if (selected) await browse(selected); else renderLibraryList();
   }
 

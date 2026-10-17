@@ -9,7 +9,7 @@ import { createApp, loadConfig } from '../server.mjs';
 import { createTvStore } from '../lib/tv-store.mjs';
 async function listen(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t) {
- const state={now:Date.now(),disabled:false,denied:false,tokens:new Map(),requests:[],logouts:[],count:0};
+ const state={now:Date.now(),disabled:false,denied:false,tokens:new Map(),requests:[],logouts:[],count:0,views:[{Id:'library',Name:'Movies',Type:'CollectionFolder',CollectionType:'movies',IsFolder:true}]};
  const media=http.createServer(async(req,res)=>{
   let raw='';for await(const chunk of req)raw+=chunk;const url=new URL(req.url,'http://localhost');const payload=raw?JSON.parse(raw):{};
   const json=(data,status=200)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(data));};
@@ -21,7 +21,7 @@ async function fixture(t) {
   if(!state.tokens.has(token))return json({},401);
   if(url.pathname==='/Users/Me')return json(user);
   if(url.pathname==='/Sessions/Logout'){state.logouts.push(token);state.tokens.delete(token);return json({});}
-  if(url.pathname.endsWith('/Views'))return json({Items:[{Id:'library',Name:'Movies',Type:'CollectionFolder',CollectionType:'movies',IsFolder:true}]});
+  if(url.pathname.endsWith('/Views'))return json({Items:state.views});
   if(url.pathname.endsWith('/Items')||url.pathname==='/UserItems/Resume'){
    const photos=url.searchParams.get('IncludeItemTypes')?.includes('Photo');
    return json({Items:photos?[{Id:'photo',Name:'Fixture photo.jpg',Type:'Photo',MediaType:'Photo',DateCreated:'2024-06-15T12:00:00Z',Path:'/private/photo.jpg'}]:[{Id:'movie',Name:'Fixture movie.mp4',Type:'Movie',MediaType:'Video',ImageTags:{Primary:'tag'},UserData:{PlaybackPositionTicks:120000000},Path:'/private/movie.mp4'},{Id:'subtitle',Name:'Fixture movie.srt',Type:'Movie',MediaType:'Video',MediaStreams:[{Type:'Video'}],Path:'/private/movie.srt'}],TotalRecordCount:85});
@@ -77,6 +77,9 @@ test('TV category tabs list matching library roots without starting a recursive 
  const response=await f.call('/api/tv/catalog?kind=movies',null,token);assert.equal(response.status,200);
  const catalogue=await response.json();assert.deepEqual(catalogue.items.map(item=>item.Id),['library']);assert.equal(catalogue.items[0].CollectionType,'movies');assert.equal(catalogue.items[0].IsFolder,true);
  assert.equal(f.state.requests.at(-1).path,'/Users/alice/Views');assert.equal(f.state.requests.some(request=>request.path==='/Users/alice/Items'),false);
+ f.state.views=[{Id:'custom',Name:'Library',Type:'CollectionFolder',IsFolder:true}];
+ const fallback=await(await f.call('/api/tv/catalog?kind=music',null,token)).json();assert.deepEqual(fallback.items.map(item=>item.Id),['custom']);assert.equal(fallback.items[0].CollectionType,'music');
+ assert.equal(f.state.requests.at(-1).path,'/Users/alice/Views');
 });
 test('native standalone play/seek progress/stop and logout revoke only that device',async t=>{
  const f=await fixture(t);const a=await f.enroll();const b=await f.enroll();
