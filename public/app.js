@@ -5,7 +5,7 @@ import { createCastControls } from './casting-sender.js';
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name', pendingLibraryId: null };
+  const state = { session: null, view: 'home', search: '', generation: 0, adminTab: 'users', poll: null, player: null, torrentStop: null, playerGeneration: 0, detailGeneration: 0, photoTimer: null, photos: null, mappingType: null, catalogueSort: 'name', folderSort: 'origin', pendingLibraryId: null };
   const cloudReturn = new URLSearchParams(window.location.search).get('cloud');
   if (['google-linked', 'google-error', 'google-cancelled'].includes(cloudReturn)) window.history.replaceState(null, '', window.location.pathname);
   let toastTimer; let playIntent = 0;
@@ -148,6 +148,7 @@ import { createCastControls } from './casting-sender.js';
       else if (view === 'photos') await renderPhotos(generation);
       else if (view === 'folders') await renderFolders(generation);
       else if (view === 'home') await renderHome(generation);
+      else if (['movies', 'series', 'music'].includes(view) && !state.search) await renderLibraryCategory(view, generation);
       else await renderCatalogue(generation);
     } catch (error) {
       if (generation === state.generation && state.session) $('content').replaceChildren(empty('No se pudo cargar esta vista', error.message), button('Volver a intentar', () => navigate(view)));
@@ -180,6 +181,24 @@ import { createCastControls } from './casting-sender.js';
       content.append(heading('Continúa donde lo dejaste'), el('div', { class: 'card-grid' }, items.map(card)));
     }).catch(() => {});
   }
+  async function renderLibraryCategory(category, generation) {
+    const userId = state.session?.user?.Id;
+    if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
+    const names = { movies: ['Películas', 'movies', /pel[ií]cul|movie|film/i], series: ['Series', 'tvshows', /serie|tv show/i], music: ['Música', 'music', /m[uú]sica|music/i] };
+    const [label, collectionType, namePattern] = names[category];
+    const response = await api(`/jellyfin/Users/${userId}/Views`, { signal: AbortSignal.timeout(12000) });
+    if (generation !== state.generation) return;
+    const libraries = (response?.Items || []).filter(view => validId(view?.Id) && (String(view.CollectionType || '').toLowerCase() === collectionType || namePattern.test(view.Name || '')));
+    const content = $('content'); content.replaceChildren(title(label, 'Elige una biblioteca para abrir sus carpetas y títulos sin escanear todo el servidor.'));
+    if (isAdministrator()) content.append(button(`Seleccionar carpeta de ${label.toLowerCase()} de Google Drive`, () => openDriveMapping(collectionType), 'primary'));
+    if (!libraries.length) {
+      content.append(empty(`No hay bibliotecas de ${label.toLowerCase()}`, isAdministrator() ? 'Conecta una carpeta para que aparezca aquí.' : 'Pide al administrador que conecte una carpeta a esta sección.'));
+      return;
+    }
+    const list = el('div', { class: 'folder-library-list', role: 'group', 'aria-label': `Bibliotecas de ${label.toLowerCase()}` });
+    for (const library of libraries) list.append(button(`▰ ${library.Name || label}`, () => { state.pendingLibraryId = library.Id; return renderFolders(generation); }, 'folder-card'));
+    content.append(list);
+  }
   async function renderFolders(generation) {
     const userId = state.session?.user?.Id;
     if (!validId(userId)) throw new Error('La sesión no tiene un usuario válido.');
@@ -196,7 +215,10 @@ import { createCastControls } from './casting-sender.js';
       content.append(list);
     };
     const browse = async (library, parentId = library.Id, stack = [], search = '', startIndex = 0, target = content) => {
-      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '100', StartIndex: String(startIndex), SortBy: 'IsFolder,SortName', SortOrder: 'Ascending', IncludeItemTypes: 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio,Photo,PhotoAlbum', Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
+      const collectionType = String(library.CollectionType || '').toLowerCase();
+      const itemTypes = ({ movies: 'Folder,CollectionFolder,Movie,Video', tvshows: 'Folder,CollectionFolder,Series,Season,Episode', music: 'Folder,CollectionFolder,MusicArtist,MusicAlbum,Audio', photos: 'Folder,CollectionFolder,PhotoAlbum,Photo', homevideos: 'Folder,CollectionFolder,PhotoAlbum,Photo,Video' })[collectionType] || 'Folder,CollectionFolder,Series,Season,MusicAlbum,MusicArtist,Movie,Video,Episode,Audio,Photo,PhotoAlbum';
+      const sortBy = state.folderSort === 'type' ? 'Type,SortName' : state.folderSort === 'name' ? 'SortName' : 'IsFolder,SortName';
+      const query = new URLSearchParams({ ParentId: parentId, Recursive: search ? 'true' : 'false', Limit: '20', StartIndex: String(startIndex), SortBy: sortBy, SortOrder: 'Ascending', IncludeItemTypes: itemTypes, Fields: 'Overview,Genres,Path', EnableUserData: 'true' });
       if (search) query.set('SearchTerm', search);
       const page = await api(`/jellyfin/Users/${userId}/Items?${query}`);
       if (generation !== state.generation) return;
@@ -209,9 +231,13 @@ import { createCastControls } from './casting-sender.js';
         const searchBox = el('input', { type: 'search', maxLength: 160, placeholder: 'Buscar dentro de esta carpeta', value: search, 'aria-label': 'Buscar en esta carpeta' });
         const submit = el('button', { type: 'submit', class: 'secondary' }, 'Buscar'); form.append(searchBox, submit);
         form.addEventListener('submit', event => { event.preventDefault(); void busy(submit, () => browse(library, parentId, stack, searchBox.value.trim())); });
+        const sort = el('select', { 'aria-label': 'Organizar contenido' }, el('option', { value: 'name' }, 'Nombre'), el('option', { value: 'type' }, 'Tipo'), el('option', { value: 'origin' }, 'Origen / carpetas'));
+        sort.value = state.folderSort;
+        sort.addEventListener('change', () => { state.folderSort = sort.value; void busy(sort, () => browse(library, parentId, stack, searchBox.value.trim())); });
+        const sortControl = el('label', { class: 'library-sort' }, 'Organizar: ', sort);
         const selector = el('div', { class: 'folder-library-list', role: 'group', 'aria-label': 'Bibliotecas disponibles' });
         for (const candidate of libraries) selector.append(button(candidate.Name || 'Biblioteca', () => browse(candidate), candidate.Id === library.Id ? 'active' : 'small-button'));
-        target.append(breadcrumbs, selector, form);
+        target.append(breadcrumbs, selector, form, sortControl);
       }
       const items = Array.isArray(page?.Items) ? page.Items : [];
       const grid = target.querySelector('.card-grid') || el('div', { class: 'card-grid' });

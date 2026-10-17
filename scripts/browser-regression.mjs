@@ -13,7 +13,7 @@ const root = await mkdtemp(path.join(os.tmpdir(), 'jrplex-browser-'));
 const generated = spawnSync('ffmpeg', ['-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24','-t','8','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart','-y',path.join(root,'template.mp4')]);
 assert.equal(generated.status,0,generated.stderr?.toString());
 const videoBytes = await readFile(path.join(root,'template.mp4'));
-const libraries = []; const hash='a'.repeat(40); let added=false; let pieces=0; let qbState='downloading'; let globalCatalogueQueries=0;
+const libraries = []; const hash='a'.repeat(40); let added=false; let pieces=0; let qbState='downloading'; let recursiveCatalogueQueries=0; let lastLibraryQuery=null;
 const driveTree = {
   '': [{ id: 'mediafolder123456789', name: 'Media' }],
   mediafolder123456789: [{ id: 'moviesfolder123456789', name: 'Peliculas' }, { id: 'photosfolder123456789', name: 'Fotos' }, { id: 'musicfolder123456789', name: 'Musica' }],
@@ -35,16 +35,19 @@ const user={Id:'fixture',Name:'Test admin',Policy:{IsAdministrator:true}};
 const media=http.createServer(async(req,res)=>{
   const u=new URL(req.url,'http://localhost'); let raw=''; for await(const c of req) raw+=c;
   const json=(value)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value));};
+  if(u.pathname.endsWith('/Items')&&u.searchParams.get('Recursive')==='true')recursiveCatalogueQueries++;
   if(u.pathname==='/Users/AuthenticateByName') return json({AccessToken:'FIXTURE_TOKEN',User:user});
   if(u.pathname==='/Users/Me') return json(user);
   if(u.pathname==='/Users/fixture/Views') return json({Items:libraries.map(l=>({Id:l.ItemId,Name:l.Name,CollectionType:l.CollectionType,IsFolder:true}))});
   if(u.pathname==='/UserItems/Resume') return json({Items:[]});
   if(u.pathname==='/Users/fixture/Items') {
+    lastLibraryQuery=u.searchParams;
     const library=libraries.find(l=>l.ItemId===u.searchParams.get('ParentId'));
-    return json({Items:library?.CollectionType==='homevideos'?[{Id:'photo-fixture',Name:'Test photograph',Type:'Photo',MediaType:'Photo'}]:[],TotalRecordCount:library?.CollectionType==='homevideos'?1:0});
+    const items=library?.CollectionType==='homevideos'?[{Id:'photo-fixture',Name:'Test photograph',Type:'Photo',MediaType:'Photo'}]:library?.CollectionType==='music'?[{Id:'album-fixture',Name:'Test album',Type:'MusicAlbum',IsFolder:true}]:[];
+    return json({Items:items,TotalRecordCount:items.length});
   }
   if(u.pathname==='/Items/photo-fixture/Images/Primary'){res.writeHead(200,{'content-type':'image/svg+xml'});return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="blue"/></svg>');}
-  if(u.pathname==='/Items'&&u.searchParams.get('Recursive')==='true'&&u.searchParams.get('IncludeItemTypes')==='Movie,Series,MusicAlbum,Audio,Video,Episode'){globalCatalogueQueries++;return json({Items:[],TotalRecordCount:0});}
+  if(u.pathname==='/Items'&&u.searchParams.get('Recursive')==='true'&&u.searchParams.get('IncludeItemTypes')==='Movie,Series,MusicAlbum,Audio,Video,Episode')return json({Items:[],TotalRecordCount:0});
   if(u.pathname==='/Items'&&u.searchParams.get('IncludeItemTypes')==='MusicAlbum,Audio'){
     assert.equal(u.searchParams.has('MediaTypes'),false,'albums must not be filtered out by MediaTypes');
     return json({Items:[{Id:'album-fixture',Name:'Test album',Type:'MusicAlbum',IsFolder:true}],TotalRecordCount:1});
@@ -68,7 +71,7 @@ try {
   const page=await browser.newPage({viewport:{width:1440,height:1100}}); const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(base+'/app');await page.getByLabel('Usuario',{exact:true}).fill('fixture');await page.getByLabel('Contraseña',{exact:true}).fill('fixture');await page.locator('#login-form button[type=submit]').click();
   await page.getByRole('heading',{name:'Tu biblioteca',exact:true}).waitFor();
-  assert.equal(globalCatalogueQueries,0,'home shows libraries without waiting for one recursive catalogue request');
+  assert.equal(recursiveCatalogueQueries,0,'home shows libraries without waiting for one recursive catalogue request');
   await page.locator('#admin-nav').click();await page.getByRole('tab',{name:'Bibliotecas y nube'}).click();
   for(const [label,folder,type] of [['películas','Peliculas','movies'],['fotos','Fotos','homevideos'],['música','Musica','music']]) {
     await page.getByRole('button',{name:`Elegir carpeta de ${label} de Drive`,exact:true}).click();
@@ -96,10 +99,10 @@ try {
   console.log('PASS Drive: pasted folder links and browsed photos/music folders save to their nested paths');
   await page.locator('[data-view=home]').click();
   await page.getByRole('button',{name:'▰ Películas de Google Drive · Películas',exact:true}).waitFor();
-  assert.equal(globalCatalogueQueries,0,'home shows mapped library roots without waiting for a recursive item scan');
+  assert.equal(recursiveCatalogueQueries,0,'home shows mapped library roots without waiting for a recursive item scan');
   await page.getByRole('button',{name:'▰ Películas de Google Drive · Películas',exact:true}).click();
   await page.getByRole('heading',{name:'Carpetas',exact:true}).waitFor();
-  assert.equal(globalCatalogueQueries,0,'opening a home library browses its root instead of scanning the entire server');
+  assert.equal(recursiveCatalogueQueries,0,'opening a home library browses its root instead of scanning the entire server');
   await mkdir(path.join(process.cwd(),'.gauntlet/production-fix'),{recursive:true});
   await page.screenshot({path:path.join(process.cwd(),'.gauntlet/production-fix/fixture-drive.png'),fullPage:true});
   await page.locator('[data-view=folders]').click();
@@ -108,13 +111,21 @@ try {
   await page.locator('[data-view=photos]').click();
   await page.locator('.photo-card').waitFor();
   await page.locator('[data-view=music]').click();
-  await page.getByRole('button',{name:'Ver Test album',exact:true}).waitFor();
+  await page.getByRole('button',{name:'▰ Música de Google Drive',exact:true}).waitFor();
   await page.getByRole('button',{name:'Seleccionar carpeta de música de Google Drive',exact:true}).click();
   assert.equal(await page.getByLabel('Contenido',{exact:true}).inputValue(),'music');
+  await page.locator('[data-view=music]').click();
+  await page.getByRole('button',{name:'▰ Música de Google Drive',exact:true}).waitFor();
+  await page.getByRole('button',{name:'▰ Música de Google Drive',exact:true}).click();
+  await page.getByRole('button',{name:'Test album',exact:true}).waitFor();
+  assert.equal(recursiveCatalogueQueries,0,'music category opens the selected library root rather than scanning the server');
+  assert.equal(lastLibraryQuery.get('Recursive'),'false');assert.equal(lastLibraryQuery.get('Limit'),'20');assert.match(lastLibraryQuery.get('IncludeItemTypes'),/MusicAlbum|Audio/);
   await page.setViewportSize({width:390,height:844});
   const photoBox=await page.locator('[data-view=photos]').boundingBox();
   assert.ok(photoBox.x>=0&&photoBox.x+photoBox.width<=390,'Photos stays within the mobile viewport');
   await page.setViewportSize({width:1440,height:1100});
+  await page.locator('#admin-nav').click();
+  await page.getByRole('tab',{name:'Descargas',exact:true}).waitFor();
   console.log('PASS navigation: real gateway paths, photos, music albums, contextual mapping and mobile menu');
   await page.getByRole('tab',{name:'Descargas',exact:true}).click();
   await page.getByLabel('Enlace magnet',{exact:true}).fill(`magnet:?xt=urn:btih:${hash}`);
