@@ -8,7 +8,7 @@ import { torrentInput } from '../lib/torrents.mjs';
 
 async function start(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function fixture(t, overrides = {}, options = {}) {
-  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0, libraryCreateDelay: 0, libraryRefreshDelay: 0, dropLibraryCreateResponse: false };
+  const state = { admin: true, disabled: false, requests: [], logout: 0, denied: false, libraries: [], failRemovePath: false, itemsDelay: 0, libraryCreateDelay: 0, libraryRefreshDelay: 0, dropLibraryCreateResponse: false, scanTaskState: 'Idle', scanTaskProgress: 0, scanTaskStarts: 0 };
   const user = () => ({ Id: 'alice', Name: 'Alice', Policy: { IsAdministrator: state.admin, IsDisabled: state.disabled } });
   const media = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -50,6 +50,8 @@ async function fixture(t, overrides = {}, options = {}) {
       return res.end(req.method === 'HEAD' ? undefined : range ? '2345' : '01234567');
     }
     if (url.pathname === '/Users') return json([user()]);
+    if (url.pathname === '/ScheduledTasks' && req.method === 'GET') return json([{ Id: 'scan-task', Key: 'RefreshMediaLibraryTask', Name: 'Scan Media Library', State: state.scanTaskState, CurrentProgressPercentage: state.scanTaskProgress }]);
+    if (url.pathname === '/ScheduledTasks/Running/scan-task' && req.method === 'POST') { state.scanTaskStarts++; state.scanTaskState = 'Running'; res.writeHead(204); return res.end(); }
     if (url.pathname === '/Library/VirtualFolders' && req.method === 'GET') return json(state.libraries);
     if (url.pathname === '/Library/VirtualFolders' && req.method === 'POST') {
       const input = raw ? JSON.parse(raw) : {};
@@ -379,6 +381,28 @@ test('admin routes revalidate current upstream policy instead of cached privileg
   assert.equal((await f.request('/api/admin/torrents', { method: 'POST', headers, body: '{"url":"magnet:?xt=urn:btih:0123456789012345678901234567890123456789"}' })).status, 403);
 });
 
+test('library scan route requires admin and CSRF, then starts only Jellyfin media scan', async t => {
+  const f = await fixture(t); const session = await f.login(); const path = '/api/admin/libraries/scan';
+  const started = await f.request(path, { method: 'POST', headers: authHeaders(session, f.config), body: '{}' });
+  assert.equal(started.status, 200);
+  assert.deepEqual(await started.json(), { scanRequested: true, alreadyRunning: false, taskName: 'Scan Media Library' });
+  const result = await (await f.request(path, { method: 'POST', headers: authHeaders(session, f.config), body: '{}' })).json();
+  assert.deepEqual(result, { scanRequested: true, alreadyRunning: true, taskName: 'Scan Media Library', progress: 0 });
+  assert.equal(f.state.scanTaskStarts, 1, 'the scheduled library task starts once');
+  assert.equal(f.state.requests.some(request => request.path === '/Library/Refresh'), false);
+  assert.equal((await f.request(path, { method: 'POST', headers: { Cookie: session.cookie, Origin: f.config.publicUrl, 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+  f.state.admin = false;
+  assert.equal((await f.request(path, { method: 'POST', headers: authHeaders(session, f.config), body: '{}' })).status, 403);
+});
+
+test('library scan route reports an already-running task without restarting it', async t => {
+  const f = await fixture(t); const session = await f.login(); f.state.scanTaskState = 'Running'; f.state.scanTaskProgress = 42;
+  const response = await f.request('/api/admin/libraries/scan', { method: 'POST', headers: authHeaders(session, f.config), body: '{}' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { scanRequested: true, alreadyRunning: true, taskName: 'Scan Media Library', progress: 42 });
+  assert.equal(f.state.scanTaskStarts, 0);
+});
+
 test('admin torrent status reports safe connection diagnosis without secrets', async (t) => {
   const f = await fixture(t, {}, { torrentClient: { configured: true, health: async () => { throw new HttpError(502, 'No se pudo autenticar con qBittorrent; revisa las credenciales de servicio.'); } } });
   const session = await f.login(); const headers = authHeaders(session, f.config);
@@ -525,35 +549,31 @@ test('existing library mapping replaces the root with the chosen folder while ke
   assert.equal(response.status, 200);
   assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Videos']);
   assert.equal(f.state.libraries[0].ItemId, 'drive');
-  assert.ok(f.state.requests.some(r => r.path === '/Library/Refresh'), 'validate library structure so new physical folder references are indexed');
+  assert.ok(f.state.requests.some(r => r.path === '/ScheduledTasks/Running/scan-task'), 'start Jellyfin’s media library scan after mapping the new physical folder');
   assert.equal((await save({ path: '/media/cloud/Other', previousPaths: ['/media/cloud'] })).status, 409, 'stale clients cannot overwrite a new mapping');
   assert.equal((await save({ path: '/etc', previousPaths: ['/media/cloud/Videos'] })).status, 400);
   assert.equal((await save({ path: '/media/cloud/../local', previousPaths: ['/media/cloud/Videos'] })).status, 400);
   assert.equal(f.state.requests.some(r => r.path === '/Items/drive' && r.method === 'DELETE'), false, 'no library or media deletion');
 });
 
-test('new library creation is idempotent after a client timeout and refresh runs in the background', async t => {
-  const f = await fixture(t); const session = await f.login(); f.state.libraryRefreshDelay = 500;
+test('new library creation is idempotent and asks Jellyfin to start one media scan', async t => {
+  const f = await fixture(t); const session = await f.login();
   const create = () => f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música de Google Drive', path: '/media/cloud/MUSICA', collectionType: 'music' }) });
-  const startedAt = Date.now();
   const first = await create();
-  assert.ok(Date.now() - startedAt < 400, 'library creation does not wait for the slower scan request');
   assert.equal(first.status, 201);
-  assert.equal((await first.json()).created, true);
+  assert.deepEqual(await first.json(), { name: 'Música de Google Drive', path: '/media/cloud/MUSICA', created: true, scanRequested: true, alreadyRunning: false, taskName: 'Scan Media Library' });
   const retry = await create();
   assert.equal(retry.status, 200);
-  assert.equal((await retry.json()).created, false);
+  assert.deepEqual(await retry.json(), { id: 'library-1', name: 'Música de Google Drive', path: '/media/cloud/MUSICA', created: false, scanRequested: true, alreadyRunning: true, taskName: 'Scan Media Library', progress: 0 });
   assert.equal(f.state.libraries.length, 1);
   assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'POST').length, 1);
-  await new Promise(resolve => setTimeout(resolve, 25));
-  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 1, 'a background scan was queued');
+  assert.equal(f.state.requests.filter(request => request.path === '/ScheduledTasks/Running/scan-task' && request.method === 'POST').length, 1, 'the same running scan is not queued twice');
   assert.equal((await f.request('/api/admin/libraries', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ name: 'Música de Google Drive', path: '/media/cloud/OTRA', collectionType: 'music' }) })).status, 409);
-  await new Promise(resolve => setTimeout(resolve, 520));
+  f.state.scanTaskState = 'Idle';
   const later = await create();
   assert.equal(later.status, 200);
-  assert.equal((await later.json()).scanRequested, true, 'a completed scan does not suppress future refreshes');
-  await new Promise(resolve => setTimeout(resolve, 25));
-  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 2);
+  assert.equal((await later.json()).alreadyRunning, false, 'a completed scan can be started again');
+  assert.equal(f.state.requests.filter(request => request.path === '/ScheduledTasks/Running/scan-task' && request.method === 'POST').length, 2);
 });
 
 test('library retry after Jellyfin commits but drops its response returns the existing mapping', async t => {
@@ -567,8 +587,7 @@ test('library retry after Jellyfin commits but drops its response returns the ex
   assert.equal((await retry.json()).created, false);
   assert.equal(f.state.libraries.length, 1);
   assert.equal(f.state.requests.filter(request => request.path === '/Library/VirtualFolders' && request.method === 'POST').length, 1);
-  await new Promise(resolve => setTimeout(resolve, 25));
-  assert.equal(f.state.requests.filter(request => request.path === '/Library/Refresh' && request.method === 'POST').length, 1, 'the retry queued one scan after Jellyfin dropped the creation response');
+  assert.equal(f.state.requests.filter(request => request.path === '/ScheduledTasks/Running/scan-task' && request.method === 'POST').length, 1, 'the retry starts one scan after Jellyfin dropped the creation response');
 });
 
 test('new library creation resolves a pasted Google Drive folder link before registration', async t => {
@@ -689,7 +708,7 @@ test('remapping an existing photo Drive library enables Jellyfin photo indexing 
   assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Photos']);
   const optionsCall = f.state.requests.find(item => item.path === '/Library/VirtualFolders/LibraryOptions');
   assert.equal(JSON.parse(optionsCall.body).LibraryOptions.EnablePhotos, true);
-  assert.ok(f.state.requests.some(item => item.path === '/Library/Refresh'));
+  assert.ok(f.state.requests.some(item => item.path === '/ScheduledTasks/Running/scan-task'));
 });
 
 test('remapping can disable photo indexing on a general library', async t => {
@@ -700,7 +719,7 @@ test('remapping can disable photo indexing on a general library', async t => {
   assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, false);
   const optionsCall = f.state.requests.find(item => item.path === '/Library/VirtualFolders/LibraryOptions');
   assert.equal(JSON.parse(optionsCall.body).LibraryOptions.EnablePhotos, false);
-  assert.ok(f.state.requests.some(item => item.path === '/Library/Refresh'));
+  assert.ok(f.state.requests.some(item => item.path === '/ScheduledTasks/Running/scan-task'));
 });
 
 

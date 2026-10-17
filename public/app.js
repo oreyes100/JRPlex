@@ -682,7 +682,10 @@ import { createCastControls } from './casting-sender.js';
       listing.append(row);
     }
     if (!libraries?.length) listing.append(el('p', {}, 'Todavía no hay bibliotecas configuradas.'));
-    listing.append(button('Buscar contenido nuevo', async () => { await api('/jellyfin/Library/Refresh', { method: 'POST' }); notify('Exploración solicitada al servidor.'); }, 'small-button'));
+    listing.append(button('Buscar contenido nuevo', async () => {
+      const result = await api('/api/admin/libraries/scan', { method: 'POST', body: {} });
+      notify(result.alreadyRunning ? `Jellyfin ya está explorando la biblioteca${Number.isFinite(result.progress) ? ` (${Math.round(result.progress)}%).` : '.'}` : 'Jellyfin inició la exploración de la biblioteca.');
+    }, 'small-button'));
     const form = el('form', { class: 'stack' }); const name = inputField(form, 'Nombre de la biblioteca', { required: true, maxLength: 80 });
     const type = inputField(form, 'Contenido', { tag: 'select' }); for (const [value, label] of [['movies', 'Películas'], ['tvshows', 'Series'], ['music', 'Música'], ['photos', 'Fotografías'], ['homevideos', 'Vídeos personales'], ['', 'Contenido mixto']]) type.append(el('option', { value }, label));
     const path = inputField(form, 'Ruta del servidor o enlace de Google Drive', { required: true, maxLength: 2048, placeholder: '/media/local/peliculas o https://drive.google.com/drive/folders/…' });
@@ -749,11 +752,12 @@ import { createCastControls } from './casting-sender.js';
       if (!value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !driveFolderLink) throw new Error('Introduce una ruta absoluta del servidor o un enlace válido de carpeta de Google Drive.');
       if (editingLibrary) {
         const result = await api(`/api/admin/libraries/${encodeURIComponent(editingLibrary.ItemId)}/path`, { method: 'POST', body: { path: value, previousPaths: editingLibrary.Locations || [], enablePhotos: enablePhotos.checked } });
-        notify(result.scanRequested ? 'Carpeta actualizada. Esta biblioteca usará únicamente la ruta elegida al terminar la exploración.' : 'Carpeta guardada. Pulsa Buscar contenido nuevo para solicitar la exploración.');
+        notify(result.scanError ? `Carpeta actualizada, pero no se inició la exploración: ${result.scanError}` : result.alreadyRunning ? `Carpeta actualizada. Jellyfin ya está explorando la biblioteca${Number.isFinite(result.progress) ? ` (${Math.round(result.progress)}%).` : '.'}` : 'Carpeta actualizada. Jellyfin inició la exploración de la biblioteca.');
         await navigate('admin'); return;
       }
       const result = await api('/api/admin/libraries', { method: 'POST', body: { name: name.value.trim(), path: value, collectionType: type.value }, signal: AbortSignal.timeout(100000) });
-      notify(result.created ? 'Biblioteca añadida. La exploración quedó en segundo plano.' : `Esta carpeta ya estaba mapeada como “${result.name}”. ${result.scanRequested ? 'Se pidió una exploración en segundo plano.' : 'No se creó un duplicado.'}`);
+      const scanStatus = result.scanError ? `No se inició la exploración: ${result.scanError}` : result.alreadyRunning ? 'Jellyfin ya está explorando la biblioteca.' : 'Jellyfin inició la exploración de la biblioteca.';
+      notify(result.created ? `Biblioteca añadida. ${scanStatus}` : `Esta carpeta ya estaba mapeada como “${result.name}”. ${scanStatus}`);
       await navigate('admin');
     }); });
     const editLibrary = async library => {

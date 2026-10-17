@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HttpError, loadConfig, opaque, equal, safePath, cleanQuery, sanitizeJson, rewritePlaylist, boundedBody, requireStrongPassword, normalizeIp } from './lib/security.mjs';
 import { mediaFolderPath, replaceLibraryPath } from './lib/library-mapping.mjs';
 import { createLibrary, removeDuplicateLibrary } from './lib/library-management.mjs';
+import { startLibraryScan } from './lib/library-scan.mjs';
 import { createTorrentClient } from './lib/torrents.mjs';
 import { createGoogleDriveOAuth, googleDriveFolderIdFromUrl } from './lib/google-drive-oauth.mjs';
 import { isCloudMountActive } from './lib/cloud-mount-status.mjs';
@@ -26,7 +27,6 @@ export function createApp(config = loadConfig(), options = {}) {
   const attempts = new Map();
   const mappingOperations = new Set();
   const libraryCreationOperations = new Set();
-  const libraryScansQueued = new Set();
   let libraryStructureBusy = false;
   const torrent = options.torrentClient || createTorrentClient(config);
   const googleOAuth = options.googleOAuth || createGoogleDriveOAuth(config, { projectRoot });
@@ -298,9 +298,14 @@ export function createApp(config = loadConfig(), options = {}) {
         }
         if (route.startsWith('/api/admin/')) {
           await requireAdmin(session);
+          if (route === '/api/admin/libraries/scan' && req.method === 'POST') {
+            await body(req);
+            send(res, 200, await startLibraryScan({ session, upstream, jsonResponse }));
+            return;
+          }
           if (route === '/api/admin/libraries' && req.method === 'POST') {
             const input = await body(req);
-            const result = await withLibraryStructureLock(() => createLibrary({ input, session, upstream, jsonResponse, resolvePath: resolveLibraryPath, operations: libraryCreationOperations, scansQueued: libraryScansQueued }));
+            const result = await withLibraryStructureLock(() => createLibrary({ input, session, upstream, jsonResponse, resolvePath: resolveLibraryPath, operations: libraryCreationOperations }));
             send(res, result.created ? 201 : 200, result);
             return;
           }
