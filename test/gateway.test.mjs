@@ -502,6 +502,18 @@ test('existing library mapping replaces the root with the chosen folder while ke
   assert.equal(f.state.requests.some(r => r.path === '/Items/drive' && r.method === 'DELETE'), false, 'no library or media deletion');
 });
 
+test('existing library mapping normalizes duplicate Jellyfin paths before replacing the root', async (t) => {
+  const f = await fixture(t); const session = await f.login();
+  f.state.libraries = [
+    { ItemId: 'drive', Name: 'Drive movies', Locations: ['/media/cloud', '/media/cloud'], LibraryOptions: { EnablePhotos: true, PathInfos: [{ Path: '/media/cloud' }] } },
+    { ItemId: 'photos', Name: 'Photos', Locations: ['/media/cloud/Photos'], LibraryOptions: { EnablePhotos: true } },
+  ];
+  const response = await f.request('/api/admin/libraries/drive/path', { method: 'POST', headers: authHeaders(session, f.config), body: JSON.stringify({ path: '/media/cloud/Videos', previousPaths: ['/media/cloud', '/media/cloud'], enablePhotos: false }) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.state.libraries[0].Locations, ['/media/cloud/Videos']);
+  assert.equal(f.state.libraries[0].LibraryOptions.EnablePhotos, false);
+});
+
 test('mapping rejects a new library path nested inside another library', async (t) => {
   const f = await fixture(t); const session = await f.login();
   f.state.libraries = [
